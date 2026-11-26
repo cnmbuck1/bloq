@@ -65,3 +65,34 @@ export function pieceDef(id: string): PieceDef {
   if (!d) throw new Error(`Unknown piece: ${id}`);
   return d;
 }
+
+/** A concrete arrangement of cells (a definition in one orientation). */
+export interface Shape {
+  cells: ReadonlyArray<readonly [number, number]>;
+  rows: number;
+  cols: number;
+}
+
+/**
+ * Rotate 90° clockwise: (r, c) -> (c, rows - 1 - r). Cell order is kept, so index i still names the
+ * same block (that is how a Pulse Block keeps its identity through rotations). No mirroring.
+ */
+export function rotateShape(s: Shape): Shape {
+  return { cells: s.cells.map(([r, c]) => [c, s.rows - 1 - r] as const), rows: s.cols, cols: s.rows };
+}
+
+const ORIENTED = new Map<string, Shape>();
+
+/** The definition rotated clockwise `rot` quarter turns (0-3). */
+export function orientedShape(def: PieceDef, rot: number): Shape {
+  const q = ((rot % 4) + 4) % 4;
+  if (q === 0) return def;
+  const key = `${def.id}/${q}`;
+  let s = ORIENTED.get(key);
+  if (!s) {
+    s = def;
+    for (let i = 0; i < q; i++) s = rotateShape(s);
+    ORIENTED.set(key, s);
+  }
+  return s;
+}
