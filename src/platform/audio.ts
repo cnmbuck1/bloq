@@ -1,6 +1,6 @@
 // Original sound effects, synthesised live with Web Audio (no audio files, nothing to license).
-// Bigger moments get richer, higher sounds: the clear chord grows with lines and combo,
-// and each wave of a Pulse chain rises in pitch.
+// Build 2 direction: precise, technological, never harsh. Metallic snaps use inharmonic partials;
+// energy sounds are filtered noise sweeps and sine glides. Bigger moments are richer and higher.
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
@@ -19,8 +19,9 @@ export function unlockAudio() {
     if (!AC) return;
     ctx = new AC();
     master = ctx.createGain();
-    master.gain.value = 0.55;
+    master.gain.value = 0.5;
     const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -18; comp.ratio.value = 4;
     master.connect(comp).connect(ctx.destination);
   }
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -28,79 +29,120 @@ export function unlockAudio() {
 
 export function suspendAudio() { ctx?.suspend().catch(() => {}); }
 
-function tone(freq: number, start: number, dur: number, opts: { type?: OscillatorType; gain?: number; to?: number; attack?: number } = {}) {
+interface ToneOpts { type?: OscillatorType; gain?: number; to?: number; attack?: number; filter?: number }
+
+function tone(freq: number, start: number, dur: number, o: ToneOpts = {}) {
   if (!ctx || !master) return;
   const t = ctx.currentTime + start;
-  const o = ctx.createOscillator();
+  const osc = ctx.createOscillator();
   const g = ctx.createGain();
-  o.type = opts.type ?? 'sine';
-  o.frequency.setValueAtTime(freq, t);
-  if (opts.to) o.frequency.exponentialRampToValueAtTime(opts.to, t + dur);
-  const peak = opts.gain ?? 0.2;
-  const a = opts.attack ?? 0.005;
+  osc.type = o.type ?? 'sine';
+  osc.frequency.setValueAtTime(freq, t);
+  if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + dur);
+  const peak = o.gain ?? 0.2;
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(peak, t + a);
+  g.gain.exponentialRampToValueAtTime(peak, t + (o.attack ?? 0.004));
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(master);
-  o.start(t); o.stop(t + dur + 0.02);
+  let node: AudioNode = osc;
+  if (o.filter) {
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.filter;
+    node = osc.connect(f);
+  }
+  node.connect(g).connect(master);
+  osc.start(t); osc.stop(t + dur + 0.03);
 }
 
-function noise(start: number, dur: number, gain: number, freq: number) {
+function noise(start: number, dur: number, gain: number, from: number, to = from, q = 1.2) {
   if (!ctx || !master) return;
   const t = ctx.currentTime + start;
   const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
   const buf = ctx.createBuffer(1, len, ctx.sampleRate);
   const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.5);
   const src = ctx.createBufferSource(); src.buffer = buf;
-  const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 1.2;
+  const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q;
+  f.frequency.setValueAtTime(from, t);
+  if (to !== from) f.frequency.exponentialRampToValueAtTime(to, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   src.connect(f).connect(g).connect(master);
   src.start(t);
 }
 
+/** A struck metal plate: a few inharmonic partials with fast decay. */
+function metal(base: number, start: number, dur: number, gain: number) {
+  [1, 2.76, 5.4, 8.93].forEach((m, i) => tone(base * m, start, dur / (1 + i * 0.6), { type: 'sine', gain: gain / (1 + i * 1.3) }));
+}
+
 const ready = () => enabled && ctx && ctx.state === 'running';
-// A pentatonic ladder (C major pentatonic) keeps every combination consonant.
-const LADDER = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760, 2093];
+// Minor-pentatonic ladder in A keeps layered energy tones consonant and cool rather than bright.
+const LADDER = [440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.51, 1567.98, 1760];
 
 export const sfx = {
-  select() { if (!ready()) return; tone(660, 0, 0.05, { type: 'triangle', gain: 0.06 }); },
+  /** Soft electronic click. */
+  select() { if (!ready()) return; tone(2200, 0, 0.03, { type: 'square', gain: 0.025, filter: 3500 }); },
+  /** Satisfying metallic snap. */
   place() {
     if (!ready()) return;
-    tone(196, 0, 0.11, { type: 'triangle', gain: 0.22, to: 140 });
-    noise(0, 0.04, 0.12, 2400);
+    noise(0, 0.03, 0.18, 3800);
+    metal(410, 0, 0.12, 0.09);
+    tone(120, 0, 0.07, { type: 'sine', gain: 0.22, to: 70 });
   },
+  /** Precision mechanical movement: a servo glide between two detents. */
+  rotate() {
+    if (!ready()) return;
+    noise(0, 0.02, 0.1, 5000);
+    tone(330, 0.01, 0.13, { type: 'sawtooth', gain: 0.03, to: 520, filter: 1400 });
+    noise(0.13, 0.025, 0.12, 4200);
+    metal(900, 0.13, 0.06, 0.03);
+  },
+  /** Subtle low-frequency feedback. */
   invalid() {
     if (!ready()) return;
-    tone(180, 0, 0.08, { type: 'square', gain: 0.04 });
-    tone(150, 0.09, 0.1, { type: 'square', gain: 0.04 });
+    tone(110, 0, 0.12, { type: 'sine', gain: 0.18, to: 85 });
+    tone(220, 0, 0.06, { type: 'triangle', gain: 0.03 });
   },
-  /** lines = lines cleared this move; combo = consecutive clearing moves. */
+  /** Rotation refused: no energy. */
+  denied() {
+    if (!ready()) return;
+    tone(196, 0, 0.07, { type: 'triangle', gain: 0.05 });
+    tone(147, 0.08, 0.1, { type: 'triangle', gain: 0.05 });
+  },
+  /** Line clear: an energy sweep; more lines add layers, combos lift the pitch. */
   clear(lines: number, combo: number) {
     if (!ready()) return;
-    const base = Math.min(combo - 1, 3);
-    const notes = Math.min(2 + lines, 6);
-    for (let i = 0; i < notes; i++) {
-      const f = LADDER[Math.min(base + i, LADDER.length - 1)];
-      tone(f, i * 0.045, 0.32 + i * 0.03, { type: 'sine', gain: 0.13 });
-      tone(f * 2, i * 0.045, 0.18, { type: 'triangle', gain: 0.03 });
+    const lift = Math.min(combo - 1, 4);
+    noise(0, 0.22 + lines * 0.03, 0.07 + lines * 0.02, 700, 5200, 2);
+    tone(LADDER[lift], 0, 0.28, { type: 'sine', gain: 0.1, to: LADDER[lift] * 1.5 });
+    for (let i = 1; i < Math.min(lines + 1, 5); i++) {
+      const f = LADDER[Math.min(lift + i * 2, LADDER.length - 1)];
+      tone(f, i * 0.05, 0.3, { type: 'sine', gain: 0.07 });
+      tone(f * 2.01, i * 0.05, 0.16, { type: 'triangle', gain: 0.015 });
     }
-    noise(0, 0.25, lines > 1 ? 0.09 : 0.05, 5000);
+    if (lines >= 4) noise(0.12, 0.5, 0.05, 2000, 9000, 0.8);
   },
-  /** wave = 0 for the first pulse wave, rising through a chain. */
+  /** Focused electronic burst; each wave in a chain rises and thickens. */
   pulse(wave: number, count: number) {
     if (!ready()) return;
-    const lift = Math.pow(1.122, Math.min(wave, 8)); // a whole tone per wave
-    tone(110 * lift, 0, 0.35, { type: 'sine', gain: 0.32, to: 55 * lift });
-    tone(880 * lift, 0.02, 0.25, { type: 'sine', gain: 0.05 + Math.min(count, 4) * 0.012, to: 1320 * lift });
-    noise(0, 0.18, 0.08, 1200 * lift);
+    const lift = Math.pow(1.122, Math.min(wave, 8));
+    tone(95 * lift, 0, 0.3, { type: 'sine', gain: 0.3, to: 48 * lift });
+    tone(1320 * lift, 0, 0.12, { type: 'square', gain: 0.02 + Math.min(count, 4) * 0.006, to: 660 * lift, filter: 4000 });
+    noise(0, 0.14, 0.09 + wave * 0.02, 1800 * lift, 600 * lift, 1.5);
+    if (wave >= 1) tone(LADDER[Math.min(wave * 2, LADDER.length - 1)], 0.03, 0.35, { type: 'sine', gain: 0.06 });
+  },
+  /** Soft ascending tone as a charge lands in the meter. */
+  energy(seg: number) {
+    if (!ready()) return;
+    const f = LADDER[3 + Math.min(seg, 4) * 2];
+    tone(f, 0, 0.16, { type: 'sine', gain: 0.07, to: f * 1.26 });
+    tone(f * 2, 0.03, 0.1, { type: 'sine', gain: 0.02 });
   },
   record() {
     if (!ready()) return;
-    [0, 2, 4, 5, 7].forEach((n, i) => tone(LADDER[n], i * 0.08, 0.4, { type: 'triangle', gain: 0.1 }));
+    [0, 3, 5, 7, 10].forEach((n, i) => { tone(LADDER[n], i * 0.07, 0.4, { type: 'triangle', gain: 0.07 }); metal(LADDER[n] / 2, i * 0.07, 0.1, 0.02); });
   },
   gameOver() {
     if (!ready()) return;
-    [783.99, 659.25, 523.25, 392].forEach((f, i) => tone(f, i * 0.14, 0.5, { type: 'sine', gain: 0.1 }));
+    [659.25, 523.25, 440, 329.63].forEach((f, i) => tone(f, i * 0.15, 0.5, { type: 'sine', gain: 0.08 }));
+    noise(0, 0.6, 0.03, 1200, 300);
   },
 };

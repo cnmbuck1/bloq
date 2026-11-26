@@ -7,7 +7,8 @@ import { KEYS, load, store } from './storage';
 export type AnalyticsEvent =
   | 'game_launched' | 'tutorial_started' | 'tutorial_completed' | 'tutorial_skipped'
   | 'game_started' | 'piece_placed' | 'invalid_placement' | 'lines_cleared' | 'pulse_activated'
-  | 'chain_size' | 'game_ended' | 'game_restarted' | 'game_abandoned' | 'share_selected';
+  | 'chain_size' | 'game_ended' | 'game_restarted' | 'game_abandoned' | 'share_selected'
+  | 'rotation_performed' | 'rotation_denied' | 'rotation_then_placed' | 'rotation_then_clear' | 'save_reset';
 
 export interface LoggedEvent { t: number; s: string; e: AnalyticsEvent; d?: Record<string, number | string | boolean> }
 

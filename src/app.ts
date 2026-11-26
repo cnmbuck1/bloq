@@ -2,18 +2,21 @@
 // haptics, persistence and analytics.
 
 import { drawOrbIcon } from './brand/cnmbuck-orb';
-import { DEFAULT_CONFIG, type GameConfig } from './engine/config';
-import { newGame, type GameState, type MoveResult } from './engine/game';
-import { deserializeGame, serializeGame } from './engine/save';
-import { isGameOver } from './engine/board';
+import { DEFAULT_CONFIG, type GameConfig, type RotationMode } from './engine/config';
+import { newGame, stateIsOver, type GameState, type MoveResult } from './engine/game';
+import { inspectSave, serializeGame } from './engine/save';
+import { rotationCost } from './engine/rotation';
 import { SCENARIOS } from './dev/scenarios';
 import { boardFromArt } from './game/boardArt';
 import { GameSession } from './game/session';
 import { loadSettings, saveSettings, type Settings } from './game/settings';
-import { addPlayTime, averageScore, parseStats, recordGameEnd, recordMove, type LifetimeStats } from './game/stats';
+import {
+  addPlayTime, averageRotations, averageScore, averageSessionMs, parseStats, recordGameEnd, recordMove, recordRotation,
+  recordSessionGames, type LifetimeStats,
+} from './game/stats';
 import { TUTORIAL_STEPS, tutorialState } from './game/tutorial';
 import { exportAnalytics, flushAnalytics, track } from './platform/analytics';
-import { haptic, setHapticsEnabled } from './platform/haptics';
+import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } from './platform/haptics';
 import { setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
@@ -30,11 +33,24 @@ const fmtTime = (ms: number) => {
 };
 const newSeed = () => (Math.random() * 2 ** 32) >>> 0;
 
+/** Development tunables, stored locally in development builds only. */
+interface DevConfig {
+  rotationMode: RotationMode; startCharges: number; maxCharges: number; cost: number; energyPerLine: number;
+  pulseChance: number; clearMs: number; particles: 'low' | 'medium' | 'high'; haptic: HapticIntensity;
+}
+const DEV_KEY = 'bloq.dev';
+const defaultDev = (): DevConfig => ({
+  rotationMode: DEFAULT_CONFIG.rotation.mode, startCharges: DEFAULT_CONFIG.rotation.startCharges, maxCharges: DEFAULT_CONFIG.rotation.maxCharges,
+  cost: DEFAULT_CONFIG.rotation.cost, energyPerLine: DEFAULT_CONFIG.rotation.energyPerLine, pulseChance: DEFAULT_CONFIG.generation.pulseChance,
+  clearMs: 340, particles: 'medium', haptic: 'medium',
+});
+
 type ScreenId = 'splash' | 'home' | 'game';
 type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings';
 
 export class App {
   private cfg: GameConfig = structuredClone(DEFAULT_CONFIG);
+  private dev: DevConfig = defaultDev();
   private settings: Settings = loadSettings();
   private stats: LifetimeStats = parseStats(load(KEYS.stats));
   private session: GameSession = new GameSession(newGame(newSeed(), this.cfg), this.cfg);
@@ -43,26 +59,34 @@ export class App {
   private overlay: OverlayId | null = null;
   private overlayReturn: OverlayId | null = null;
 
-  /** Active play time for the current game and the slice not yet added to lifetime stats. */
   private elapsedMs = 0;
   private unbankedMs = 0;
   private bestAtStart = 0;
+  private chainRecordAtStart = 0;
   private celebratedBest = false;
   private displayedScore = 0;
+  private gamesThisSession = 0;
+  /** Slots whose current piece the player rotated (for analytics). */
+  private rotatedSlots = new Set<number>();
   private lastResultInfo: { score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean } | null = null;
 
   private tutorialIndex = -1;
   private editMode = false;
-  private devEnabled = import.meta.env.DEV || new URLSearchParams(location.search).has('dev');
+  private devEnabled = !__RELEASE__ && (import.meta.env.DEV || new URLSearchParams(location.search).has('dev'));
 
   private raf = 0;
   private lastFrame = 0;
+  private messageQueue: { text: string; kind: string }[] = [];
   private messageTimer: ReturnType<typeof setTimeout> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
+  private rotateBtns: HTMLButtonElement[];
 
   constructor() {
+    if (!__RELEASE__) this.loadDev();
     const canvas = $<HTMLCanvasElement>('board');
     this.view = new GameView(canvas, () => this.session.state);
+    this.view.rotation = this.cfg.rotation;
+    this.rotateBtns = [...document.querySelectorAll<HTMLButtonElement>('.rotate-btn')];
     new InputController(canvas, this.view, () => this.session.state, {
       canPick: () => !this.session.locked && !this.view.animator.busy && !this.session.state.over && !this.overlay,
       onPick: () => { sfx.select(); haptic('select'); },
@@ -80,6 +104,7 @@ export class App {
     this.bindUi();
     this.lifecycle();
     track('game_launched');
+    this.checkSave();
     this.startSplash();
   }
 
@@ -89,16 +114,21 @@ export class App {
     this.screen = id;
     document.querySelectorAll('.screen').forEach((el) => el.classList.toggle('active', el.id === id));
     if (id === 'home') this.refreshHome();
-    if (id === 'game') this.view.resize();
+    if (id === 'game') this.layoutGame();
     this.wake();
+  }
+
+  private layoutGame() {
+    this.view.resize();
+    paintLogoCanvas($<HTMLCanvasElement>('navLogo'));
+    this.refreshRotateButtons();
   }
 
   private openOverlay(id: OverlayId) {
     if (this.overlay) $(this.overlay).hidden = true;
     this.overlay = id;
     $(id).hidden = false;
-    const first = $(id).querySelector<HTMLElement>('button, input');
-    first?.focus({ preventScroll: true });
+    $(id).querySelector<HTMLElement>('button, input')?.focus({ preventScroll: true });
   }
 
   private closeOverlay() {
@@ -122,109 +152,166 @@ export class App {
     paintLogoCanvas($<HTMLCanvasElement>('logo'));
     const orb = $<HTMLCanvasElement>('studioOrb');
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    orb.width = orb.height = Math.round(20 * dpr);
+    orb.width = orb.height = Math.round(18 * dpr);
     const og = orb.getContext('2d')!;
     og.setTransform(1, 0, 0, 1, 0, 0); og.clearRect(0, 0, orb.width, orb.height);
     drawOrbIcon(og, orb.width, 0, 0, 0, false);
-    $('homeBest').innerHTML = this.stats.bestScore > 0 ? `Best <b>${fmt(this.stats.bestScore)}</b>` : '';
-    $('btnContinue').hidden = !deserializeGame(load(KEYS.save));
+    $('homeBest').innerHTML = this.stats.bestScore > 0 ? `PERSONAL BEST <b>${fmt(this.stats.bestScore)}</b>` : '';
+    $('btnContinue').hidden = !inspectSave(load(KEYS.save), this.cfg).data;
+  }
+
+  /** Build 1 saves migrate; anything that can't be restored is cleared with an explanation. Records are kept. */
+  private checkSave() {
+    const raw = load(KEYS.save);
+    const { problem } = inspectSave(raw, this.cfg);
+    if (raw && (problem === 'corrupt' || problem === 'unsupported')) {
+      remove(KEYS.save);
+      track('save_reset', { problem });
+      setTimeout(() => this.toast("Your unfinished game couldn't be restored after the update. Your records are safe."), 1800);
+    }
   }
 
   // ---------------------------------------------------------------- game flow
 
   private startClassic(state?: GameState, restore?: { elapsedMs: number; bestAtStart: number }) {
     this.view.animator.finish();
+    this.clearMessages();
     this.tutorialIndex = -1;
     this.view.tutorialTarget = null;
     $('tutorial').hidden = true;
     $('btnSkip').hidden = true;
-    $('bestWrap').hidden = false;
-    $('score').style.visibility = '';
+    $('btnGameSettings').hidden = false;
+    $('scores').style.visibility = '';
+    $('status').style.visibility = '';
     this.session = new GameSession(state ?? newGame(newSeed(), this.cfg), this.cfg);
+    this.rotatedSlots.clear();
     this.elapsedMs = restore?.elapsedMs ?? 0;
     this.bestAtStart = restore?.bestAtStart ?? this.stats.bestScore;
+    this.chainRecordAtStart = this.stats.maxChain;
     this.celebratedBest = this.session.state.score > this.bestAtStart;
     this.displayedScore = this.session.state.score;
     this.view.fade = 0;
     this.updateHud(true);
-    this.setCombo(this.session.state.combo);
+    this.setCombo(this.session.state.combo, false);
     $('chain').classList.remove('on');
     this.show('game');
-    if (!restore) track('game_started', { seed: this.session.state.seed });
+    if (!restore) track('game_started', { seed: this.session.state.seed, rotationMode: this.cfg.rotation.mode });
     this.persist();
+    if (this.session.state.over) setTimeout(() => this.gameOver(), 600);
   }
 
   private play() {
     unlockAudio();
-    const existing = deserializeGame(load(KEYS.save));
-    if (existing) this.abandon(existing.state.score, existing.elapsedMs);
+    const existing = inspectSave(load(KEYS.save), this.cfg).data;
+    if (existing) this.abandon(existing.state.score);
     if (load(KEYS.tutorialDone) !== '1') this.startTutorial();
     else this.startClassic();
   }
 
   private continueGame() {
     unlockAudio();
-    const save = deserializeGame(load(KEYS.save));
+    const save = inspectSave(load(KEYS.save), this.cfg).data;
     if (!save) { this.refreshHome(); return; }
     this.startClassic(save.state, { elapsedMs: save.elapsedMs, bestAtStart: save.bestAtStart });
   }
 
-  private abandon(score: number, _elapsed: number) {
+  private abandon(score: number) {
     track('game_abandoned', { score });
     this.stats = recordGameEnd(this.stats, score);
     store(KEYS.stats, JSON.stringify(this.stats));
     remove(KEYS.save);
   }
 
+  private rotate(slot: number) {
+    if (this.overlay || this.view.animator.busy || this.view.drag || this.editMode) return;
+    const st = this.session.state;
+    const piece = st.tray[slot];
+    if (!piece) return;
+    const out = this.session.tryRotate(slot);
+    if (!out) {
+      if (this.session.lastRejection === 'no-energy') {
+        sfx.denied(); haptic('invalid');
+        this.view.denied = performance.now();
+        if (st.mode === 'classic') track('rotation_denied', { piece: piece.defId });
+        this.wake();
+      }
+      return;
+    }
+    const now = performance.now();
+    this.view.rotating.set(slot, now);
+    if (out.cost > 0) this.view.drain = { seg: out.state.energy, start: now };
+    sfx.rotate(); haptic('rotate');
+    if (st.mode === 'classic') {
+      this.rotatedSlots.add(slot);
+      track('rotation_performed', { piece: piece.defId, cost: out.cost, energyLeft: out.state.energy });
+      this.stats = recordRotation(this.stats, out.cost);
+      this.persist();
+    }
+    this.refreshRotateButtons();
+    this.wake();
+  }
+
   private drop(slot: number, row: number, col: number): boolean {
     const result = this.session.tryPlace(slot, row, col);
     if (!result) return false;
-    const st = this.session.state;
-    const tutorial = st.mode === 'tutorial';
+    const tutorial = this.session.state.mode === 'tutorial';
     if (tutorial) this.view.tutorialTarget = null;
+    const lines = result.rows.length + result.cols.length;
     sfx.place(); haptic('place');
     if (!tutorial) {
-      track('piece_placed', { piece: result.piece.defId, lines: result.rows.length + result.cols.length, combo: result.combo, chain: result.chain });
-      if (result.rows.length + result.cols.length) track('lines_cleared', { count: result.rows.length + result.cols.length, combo: result.combo });
+      const rotated = this.rotatedSlots.has(slot);
+      track('piece_placed', { piece: result.piece.defId, rot: result.piece.rot ?? 0, lines, combo: result.combo, chain: result.chain, rotated });
+      if (rotated) {
+        track('rotation_then_placed', { piece: result.piece.defId });
+        if (lines) track('rotation_then_clear', { lines });
+      }
+      if (result.newTray) this.rotatedSlots.clear(); else this.rotatedSlots.delete(slot);
+      if (lines) track('lines_cleared', { count: lines, combo: result.combo, energyGained: result.energyGained });
       if (result.chain) { track('pulse_activated', { count: result.chain }); track('chain_size', { size: result.chain }); }
       this.stats = recordMove(this.stats, result);
       this.persist();
     }
-    this.view.animator.reduced = this.settings.reducedMotion;
-    this.view.animator.showPoints = !tutorial;
-    this.view.animator.play(result, performance.now(), {
+    const A = this.view.animator;
+    A.reduced = this.settings.reducedMotion;
+    A.showPoints = !tutorial;
+    A.play(result, performance.now(), {
       onLines: (r) => {
-        const lines = r.rows.length + r.cols.length;
-        sfx.clear(lines, r.combo);
-        haptic(lines >= 3 ? 'big' : 'clear');
-        this.displayedScore = r.scoreAfter - (tutorial ? r.scoreAfter : 0);
+        const n = r.rows.length + r.cols.length;
+        sfx.clear(n, r.combo);
+        haptic(n >= 3 ? 'big' : 'clear');
+        this.displayedScore = tutorial ? 0 : r.scoreAfter;
         this.updateHud();
-        this.setCombo(r.combo);
+        this.setCombo(r.combo, true);
         this.celebrate(r, 'lines');
       },
       onWave: (i, wave, r) => {
         sfx.pulse(i, wave.pulses.length);
-        haptic(i >= 1 ? 'big' : 'pulse');
+        haptic(i >= 1 || wave.pulses.length > 1 ? 'big' : 'pulse');
         const activated = r.waves.slice(0, i + 1).reduce((s, w) => s + w.pulses.length, 0);
         if (activated >= 2) this.setChain(activated);
-        if (i === r.waves.length - 1 && r.chain >= 2) this.celebrate(r, 'chain');
+        if (i === r.waves.length - 1) this.celebrate(r, 'chain');
       },
+      onEnergy: (seg) => { sfx.energy(seg); this.refreshRotateButtons(); this.wake(); },
       onDone: (r) => this.afterResolution(r),
     });
-    if (result.rows.length + result.cols.length === 0) {
+    if (lines === 0) {
       this.displayedScore = tutorial ? 0 : result.scoreAfter;
       this.updateHud();
-      this.setCombo(result.combo);
+      this.setCombo(result.combo, false);
     }
+    this.refreshRotateButtons();
     this.wake();
     return true;
   }
 
   private afterResolution(r: MoveResult) {
     this.session.finishResolution();
-    setTimeout(() => $('chain').classList.remove('on'), 900);
+    this.refreshRotateButtons();
+    setTimeout(() => $('chain').classList.remove('on'), 1000);
     if (this.session.state.mode === 'tutorial') {
-      setTimeout(() => this.nextTutorialStep(), this.settings.reducedMotion ? 350 : 650);
+      const step = TUTORIAL_STEPS[this.tutorialIndex];
+      if (step?.outro) this.message(step.outro.toUpperCase(), 'big');
+      setTimeout(() => this.nextTutorialStep(), (this.settings.reducedMotion ? 350 : 700) + (step?.outro ? 700 : 0));
       return;
     }
     if (r.gameOver) {
@@ -233,52 +320,57 @@ export class App {
     }
   }
 
-  /** Line messages when the lines clear; chain messages when the last wave lands. Ordinary moves stay quiet. */
+  /** Line messages when lines clear; chain messages when the last wave lands. Ordinary moves stay quiet. */
   private celebrate(r: MoveResult, phase: 'lines' | 'chain') {
     const lines = r.rows.length + r.cols.length;
     const tutorial = this.session.state.mode === 'tutorial';
-    const queue: [string, string][] = [];
-    if (phase === 'lines') {
-      const names = ['', '', 'Double Clear!', 'Triple Clear!', 'Quad Clear!'];
-      if (r.chain === 1) queue.push(['Pulse Activated!', '']);
-      else if (r.chain === 0) {
-        if (lines >= 5) queue.push(['Mega Clear!', 'big']);
-        else if (lines >= 2) queue.push([names[lines], lines >= 3 ? 'big' : '']);
-        else if (r.combo >= 3) queue.push(['Great Move!', '']);
-      }
-    } else if (r.chain >= 2) queue.push([`Chain Reaction ×${r.chain}!`, 'big']);
-    const last = phase === 'chain' || r.chain === 0 || (r.chain === 1 && phase === 'lines');
+    const out: [string, string][] = [];
+    if (phase === 'lines' && r.chain === 0) {
+      if (lines >= 4) out.push([lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big']);
+      else if (lines === 3) out.push(['TRIPLE CLEAR', 'big']);
+      else if (lines === 2) out.push(['DOUBLE CLEAR', '']);
+      else if (r.combo >= 3) out.push(['GREAT MOVE', '']);
+    }
+    if (phase === 'chain') {
+      const c = r.chain;
+      out.push([c >= 5 ? `MASSIVE REACTION ×${c}` : c >= 3 ? `CHAIN REACTION ×${c}` : c === 2 ? 'DOUBLE PULSE' : 'PULSE ACTIVATED', c >= 2 ? 'big' : '']);
+      if (!tutorial && c >= 2 && c > this.chainRecordAtStart && this.chainRecordAtStart > 0) { out.push(['NEW CHAIN RECORD', 'record']); this.chainRecordAtStart = c; }
+    }
+    const last = phase === 'chain' || r.chain === 0;
     if (last && !tutorial) {
       const boardClear = r.boardAfterPlace.cells.every((c, k) => !c || r.lineCells.includes(k) || r.waves.some((w) => w.cleared.includes(k)));
-      if (boardClear) queue.push(['Board Clear!', 'big']);
+      if (boardClear) out.push(['BOARD CLEAR', 'big']);
       if (!this.celebratedBest && this.bestAtStart > 0 && r.scoreAfter > this.bestAtStart) {
         this.celebratedBest = true;
-        queue.push(['New Personal Best!', 'record']);
+        out.push(['NEW PERSONAL BEST', 'record']);
       }
     }
-    queue.forEach(([text, kind], i) => setTimeout(() => {
-      this.message(text, kind);
-      if (kind === 'record') { sfx.record(); haptic('record'); }
-    }, i * 1100));
+    for (const [text, kind] of out) this.message(text, kind);
   }
 
   private gameOver() {
     const st = this.session.state;
     const prevBest = this.bestAtStart;
-    this.stats = recordGameEnd(addPlayTime(this.stats, this.unbankedMs), st.score);
+    this.gamesThisSession++;
+    this.stats = recordSessionGames(recordGameEnd(addPlayTime(this.stats, this.unbankedMs), st.score), this.gamesThisSession);
     this.unbankedMs = 0;
     store(KEYS.stats, JSON.stringify(this.stats));
-    track('game_ended', { score: st.score, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs) });
+    const occupancy = st.board.cells.filter(Boolean).length;
+    track('game_ended', { score: st.score, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs), occupancy, energyLeft: st.energy, rotations: st.stats.rotations, gameInSession: this.gamesThisSession });
     const newRecord = st.score > prevBest && st.score > 0;
     sfx.gameOver(); haptic(newRecord ? 'record' : 'clear');
+    if (newRecord) setTimeout(() => sfx.record(), 500);
     this.lastResultInfo = { score: st.score, best: this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord };
-    $('resKicker').textContent = newRecord ? 'NEW PERSONAL BEST!' : 'GAME OVER';
+    $('resKicker').textContent = newRecord ? 'NEW PERSONAL BEST' : 'GAME OVER';
     $('resKicker').classList.toggle('record', newRecord);
     $('resScore').textContent = fmt(st.score);
-    $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Best ${fmt(this.stats.bestScore)}`;
+    $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(this.stats.bestScore)}`;
     $('resLines').textContent = fmt(st.stats.linesCleared);
-    $('resCombo').textContent = st.stats.maxCombo ? `×${st.stats.maxCombo}` : '–';
+    $('resMaxLines').textContent = st.stats.maxLinesAtOnce ? `${st.stats.maxLinesAtOnce}` : '–';
+    const mult = this.cfg.scoring.comboMultipliers;
+    $('resCombo').textContent = st.stats.maxCombo ? `×${mult[Math.min(st.stats.maxCombo, mult.length) - 1].toFixed(1)}` : '–';
     $('resChain').textContent = st.stats.maxChain ? `×${st.stats.maxChain}` : '–';
+    $('resRot').textContent = fmt(st.stats.rotations);
     $('resTime').textContent = fmtTime(this.elapsedMs);
     this.view.fade = 1;
     this.openOverlay('results');
@@ -298,32 +390,33 @@ export class App {
   private startTutorial() {
     track('tutorial_started');
     this.view.animator.finish();
+    this.clearMessages();
     this.tutorialIndex = -1;
     $('btnSkip').hidden = false;
-    $('bestWrap').hidden = true;
-    $('score').style.visibility = 'hidden';
+    $('btnGameSettings').hidden = true;
+    $('scores').style.visibility = 'hidden';
+    $('status').style.visibility = 'hidden';
     this.displayedScore = 0;
     this.updateHud(true);
-    this.setCombo(0);
+    this.setCombo(0, false);
     this.show('game');
     this.nextTutorialStep();
   }
 
   private nextTutorialStep() {
+    if (this.screen !== 'game' || this.tutorialIndex < -1) return;
     this.tutorialIndex++;
-    if (this.tutorialIndex >= TUTORIAL_STEPS.length) {
-      this.finishTutorial(false);
-      return;
-    }
+    if (this.tutorialIndex >= TUTORIAL_STEPS.length) { this.finishTutorial(false); return; }
     const step = TUTORIAL_STEPS[this.tutorialIndex];
     this.session = new GameSession(tutorialState(step), this.cfg);
     this.session.requiredTarget = step.target;
+    this.session.rotationAllowed = !!step.rotate;
     this.view.tutorialTarget = step.target;
     $('tutorial').hidden = false;
     $('tutStep').textContent = `STEP ${this.tutorialIndex + 1} OF ${TUTORIAL_STEPS.length}`;
     $('tutTitle').textContent = step.title;
     $('tutHint').textContent = step.hint;
-    this.view.resize();
+    this.layoutGame();
     this.wake();
   }
 
@@ -331,7 +424,7 @@ export class App {
     store(KEYS.tutorialDone, '1');
     track(skipped ? 'tutorial_skipped' : 'tutorial_completed');
     this.startClassic();
-    if (!skipped) this.message("You're ready. Plan your Pulses!", 'big');
+    if (!skipped) this.message("YOU'RE READY", 'big');
   }
 
   // ---------------------------------------------------------------- HUD
@@ -344,41 +437,68 @@ export class App {
       scoreEl.dataset.v = String(target);
       scoreEl.textContent = fmt(target);
     } else {
-      const start = performance.now(), from = cur, dur = Math.min(600, 200 + (target - from));
+      const start = performance.now(), from = cur, dur = Math.min(550, 180 + (target - from) * 0.6);
       const step = (now: number) => {
+        if (scoreEl.dataset.v !== String(target)) return;
         const t = Math.min(1, (now - start) / dur);
-        const v = Math.round(from + (target - from) * (1 - Math.pow(1 - t, 3)));
-        scoreEl.textContent = fmt(v);
-        if (t < 1 && scoreEl.dataset.v === String(target)) requestAnimationFrame(step);
+        scoreEl.textContent = fmt(Math.round(from + (target - from) * (1 - Math.pow(1 - t, 3))));
+        if (t < 1) requestAnimationFrame(step);
       };
       scoreEl.dataset.v = String(target);
       requestAnimationFrame(step);
       if (target - from >= 100) { scoreEl.classList.remove('bump'); void scoreEl.offsetWidth; scoreEl.classList.add('bump'); }
     }
-    scoreEl.setAttribute('aria-label', `Score ${target}`);
-    const best = Math.max(this.stats.bestScore, this.session.state.mode === 'classic' ? this.session.state.score : 0);
+    scoreEl.setAttribute('aria-label', `Current score ${target}`);
+    const live = this.session.state.mode === 'classic' ? this.session.state.score : 0;
+    const best = Math.max(this.stats.bestScore, live);
     $('best').textContent = fmt(best);
+    $('best').classList.toggle('record', live > 0 && live >= this.bestAtStart && live === best && this.bestAtStart > 0);
   }
 
-  private setCombo(combo: number) {
+  private setCombo(combo: number, animate: boolean) {
     const el = $('combo');
-    const mult = this.cfg.scoring.comboMultipliers[Math.min(Math.max(combo, 1), this.cfg.scoring.comboMultipliers.length) - 1];
-    if (combo >= 2) { el.textContent = `COMBO ×${mult.toFixed(1)}`; el.classList.add('on'); }
-    else el.classList.remove('on');
+    const m = this.cfg.scoring.comboMultipliers;
+    const mult = combo > 0 ? m[Math.min(combo, m.length) - 1] : 1;
+    $('comboMult').textContent = `×${mult.toFixed(1)}`;
+    el.classList.toggle('on', combo >= 2);
+    el.setAttribute('aria-label', `Combo multiplier ${mult.toFixed(1)}`);
+    [...$('comboMeter').children].forEach((seg, i) => seg.classList.toggle('lit', i < Math.min(combo, m.length)));
+    if (animate && combo >= 2) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
   }
 
   private setChain(n: number) {
     const el = $('chain');
-    el.textContent = `CHAIN ×${n}`;
+    $('chainValue').textContent = `×${n}`;
     el.classList.add('on');
+    el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
   }
 
+  /** Messages queue so two never overwrite each other. */
   private message(text: string, kind = '') {
-    const el = $('message');
-    el.textContent = text;
-    el.className = `message on ${kind}`;
+    this.messageQueue.push({ text, kind });
+    if (!this.messageTimer) this.nextMessage();
+  }
+
+  private clearMessages() {
+    this.messageQueue = [];
     if (this.messageTimer) clearTimeout(this.messageTimer);
-    this.messageTimer = setTimeout(() => { el.className = 'message'; }, kind ? 1500 : 1100);
+    this.messageTimer = null;
+    $('message').className = 'message';
+  }
+
+  private nextMessage() {
+    const el = $('message');
+    const m = this.messageQueue.shift();
+    if (!m) { el.className = 'message'; this.messageTimer = null; return; }
+    el.textContent = m.text;
+    el.className = 'message';
+    void el.offsetWidth;
+    el.className = `message on ${m.kind}`;
+    if (m.kind === 'record') { sfx.record(); haptic('record'); }
+    this.messageTimer = setTimeout(() => {
+      el.className = `message ${m.kind}`;
+      this.messageTimer = setTimeout(() => this.nextMessage(), 180);
+    }, m.kind ? 1150 : 900);
   }
 
   private toast(text: string) {
@@ -386,7 +506,32 @@ export class App {
     el.textContent = text;
     el.classList.add('on');
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => el.classList.remove('on'), 2000);
+    this.toastTimer = setTimeout(() => el.classList.remove('on'), 3200);
+  }
+
+  /** Rotate buttons sit on the bottom edge of each tray slot; their state follows energy and playability. */
+  private refreshRotateButtons() {
+    if (!this.view.layout) return;
+    const st = this.session.state;
+    const rc = this.cfg.rotation;
+    const step = st.mode === 'tutorial' ? TUTORIAL_STEPS[this.tutorialIndex] : null;
+    this.rotateBtns.forEach((b, slot) => {
+      const piece = st.tray[slot];
+      const hiddenByTutorial = st.mode === 'tutorial' && (!step?.rotate || this.view.tutorialTarget?.slot !== slot);
+      b.hidden = !piece || rc.mode === 'none' || hiddenByTutorial || st.over;
+      if (b.hidden || !piece) return;
+      const pos = this.view.rotateButtonCenter(slot);
+      b.style.left = `${pos.x}px`; b.style.top = `${pos.y}px`;
+      const cost = rotationCost(rc, piece);
+      const affordable = rc.mode !== 'energy' || cost <= st.energy;
+      b.classList.toggle('off', !affordable);
+      b.classList.toggle('free', affordable && cost === 0 && rc.mode === 'energy');
+      const play = this.view.playabilityOf(slot);
+      b.classList.toggle('hint', affordable && play === 'after-rotation' && !this.view.animator.busy && st.mode === 'classic');
+      b.classList.toggle('tut', !!step?.rotate && (piece.rot ?? 0) !== (step.target.rot ?? 0));
+      b.setAttribute('aria-label', `Rotate piece ${slot + 1}${rc.mode !== 'energy' ? '' : cost === 0 ? ' (free, looks the same)' : affordable ? `, uses ${cost} energy` : ', no energy left'}`);
+      b.setAttribute('aria-disabled', String(!affordable));
+    });
   }
 
   // ---------------------------------------------------------------- loop
@@ -404,10 +549,12 @@ export class App {
       const st = this.session.state;
       if (st.mode === 'classic' && !st.over && !this.overlay && document.visibilityState === 'visible') {
         this.elapsedMs += dt; this.unbankedMs += dt;
-        keepGoing = true; // the play clock
+        keepGoing = true;
       }
+      const wasActive = this.view.animator.active;
       this.view.animator.update(now, dt);
       this.view.render(now);
+      if (wasActive && !this.view.animator.active) this.refreshRotateButtons();
       keepGoing = keepGoing || this.view.needsFrames;
     } else if (this.screen === 'home') {
       paintHomeArt($<HTMLCanvasElement>('homeArt'), now, this.settings.reducedMotion);
@@ -431,44 +578,144 @@ export class App {
     $<HTMLInputElement>('setHaptics').checked = s.haptics;
     $<HTMLInputElement>('setMotion').checked = s.reducedMotion;
     $<HTMLInputElement>('setContrast').checked = s.highContrast;
+    if (this.screen === 'game') this.view.resize();
     this.wake();
   }
 
   private renderStats() {
     const s = this.stats;
     const rows: [string, string][] = [
-      ['Best score', fmt(s.bestScore)],
+      ['Personal best', fmt(s.bestScore)],
       ['Games played', fmt(s.gamesPlayed)],
       ['Average score', fmt(averageScore(s))],
+      ['Average game', fmtTime(averageSessionMs(s))],
       ['Lines cleared', fmt(s.totalLines)],
-      ['Most lines at once', fmt(s.maxLinesAtOnce)],
-      ['Longest combo', s.maxCombo ? `×${s.maxCombo}` : '–'],
-      ['Pulses activated', fmt(s.totalPulses)],
+      ['Largest clear', fmt(s.maxLinesAtOnce)],
+      ['Longest combo', s.maxCombo ? `${s.maxCombo} moves` : '–'],
       ['Biggest chain', s.maxChain ? `×${s.maxChain}` : '–'],
+      ['Pulses activated', fmt(s.totalPulses)],
+      ['Rotations', fmt(s.totalRotations)],
+      ['Rotations per game', `${averageRotations(s)}`],
+      ['Energy earned / spent', `${fmt(s.energyEarned)} / ${fmt(s.energySpent)}`],
+      ['Most games in a row', fmt(Math.max(s.maxGamesInSession, this.gamesThisSession))],
       ['Time played', fmtTime(s.totalPlayMs + this.unbankedMs)],
       ['Days played', fmt(s.days.length)],
     ];
     $('statGrid').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
   }
 
-  // ---------------------------------------------------------------- dev tools
+  // ---------------------------------------------------------------- dev tools (never in release builds)
+
+  private loadDev() {
+    if (__RELEASE__) return;
+    try { this.dev = { ...defaultDev(), ...JSON.parse(load(DEV_KEY) ?? '{}') }; } catch { this.dev = defaultDev(); }
+    this.applyDev();
+  }
+
+  private applyDev() {
+    const d = this.dev, r = this.cfg.rotation;
+    r.mode = d.rotationMode; r.startCharges = d.startCharges; r.maxCharges = Math.max(1, d.maxCharges);
+    r.cost = d.cost; r.energyPerLine = d.energyPerLine;
+    this.cfg.generation.pulseChance = d.pulseChance;
+    if (this.view) {
+      this.view.animator.speed = d.clearMs / 340;
+      this.view.animator.particleScale = { low: 0.5, medium: 1, high: 1.6 }[d.particles];
+    }
+    setHapticIntensity(d.haptic);
+  }
+
+  private saveDev() {
+    if (__RELEASE__) return;
+    store(DEV_KEY, JSON.stringify(this.dev)); this.applyDev(); this.refreshRotateButtons(); this.wake();
+  }
 
   private editCell(r: number, c: number) {
+    if (__RELEASE__) return;
     const st = this.session.state;
     const board = { size: st.board.size, cells: st.board.cells.slice() };
     const k = r * 8 + c, cur = board.cells[k];
-    board.cells[k] = !cur ? { color: (r + c) % 5 } : !cur.pulse ? { color: cur.color, pulse: true } : null;
-    this.session.state = { ...st, board, over: isGameOver(board, st.tray) };
+    board.cells[k] = !cur ? { color: 0 } : !cur.pulse ? { color: 0, pulse: true } : null;
+    const next = { ...st, board };
+    next.over = stateIsOver(next, this.cfg);
+    this.session.state = next;
     this.persist();
   }
 
   private setupDev() {
+    if (__RELEASE__) { document.getElementById('devSection')?.remove(); document.getElementById('devBanner')?.remove(); return; }
     $('devSection').hidden = !this.devEnabled;
+    if (!this.devEnabled) return;
     const sel = $<HTMLSelectElement>('devScenario');
     if (!sel.options.length) sel.innerHTML = SCENARIOS.map((s, i) => `<option value="${i}">${s.name}</option>`).join('');
-    const pulse = $<HTMLInputElement>('devPulse');
-    pulse.value = String(this.cfg.generation.pulseChance);
-    $('devPulseOut').textContent = `${Math.round(this.cfg.generation.pulseChance * 100)}%`;
+    const d = this.dev;
+    $<HTMLSelectElement>('devRotMode').value = d.rotationMode;
+    $<HTMLInputElement>('devStart').value = String(d.startCharges);
+    $<HTMLInputElement>('devMax').value = String(d.maxCharges);
+    $<HTMLInputElement>('devCost').value = String(d.cost);
+    $<HTMLInputElement>('devPerLine').value = String(d.energyPerLine);
+    $<HTMLInputElement>('devPulse').value = String(d.pulseChance);
+    $('devPulseOut').textContent = `${Math.round(d.pulseChance * 100)}%`;
+    $<HTMLInputElement>('devClear').value = String(d.clearMs);
+    $('devClearOut').textContent = `${d.clearMs} ms`;
+    $<HTMLSelectElement>('devParticles').value = d.particles;
+    $<HTMLSelectElement>('devHaptic').value = d.haptic;
+  }
+
+  private bindDev() {
+    if (__RELEASE__) return;
+    const num = (id: string, key: 'startCharges' | 'maxCharges' | 'cost' | 'energyPerLine') => $<HTMLInputElement>(id).addEventListener('change', (e) => {
+      const v = Math.max(0, Math.min(9, Math.round(Number((e.target as HTMLInputElement).value) || 0)));
+      this.dev = { ...this.dev, [key]: v };
+      this.saveDev();
+    });
+    num('devStart', 'startCharges'); num('devMax', 'maxCharges'); num('devCost', 'cost'); num('devPerLine', 'energyPerLine');
+    $<HTMLSelectElement>('devRotMode').addEventListener('change', (e) => { this.dev.rotationMode = (e.target as HTMLSelectElement).value as RotationMode; this.saveDev(); });
+    $<HTMLSelectElement>('devParticles').addEventListener('change', (e) => { this.dev.particles = (e.target as HTMLSelectElement).value as DevConfig['particles']; this.saveDev(); });
+    $<HTMLSelectElement>('devHaptic').addEventListener('change', (e) => { this.dev.haptic = (e.target as HTMLSelectElement).value as HapticIntensity; this.saveDev(); haptic('clear'); });
+    $<HTMLInputElement>('devPulse').addEventListener('input', (e) => {
+      this.dev.pulseChance = Number((e.target as HTMLInputElement).value);
+      $('devPulseOut').textContent = `${Math.round(this.dev.pulseChance * 100)}%`;
+      this.saveDev();
+    });
+    $<HTMLInputElement>('devClear').addEventListener('input', (e) => {
+      this.dev.clearMs = Number((e.target as HTMLInputElement).value);
+      $('devClearOut').textContent = `${this.dev.clearMs} ms`;
+      this.saveDev();
+    });
+    const on = (id: string, fn: () => void) => $(id).addEventListener('click', fn);
+    on('devLoad', () => {
+      const sc = SCENARIOS[Number($<HTMLSelectElement>('devScenario').value)];
+      const base = newGame(newSeed(), this.cfg, { board: boardFromArt(sc.board), energy: sc.energy });
+      const state: GameState = { ...base, tray: sc.tray.map((p) => (p ? { ...p } : null)), energy: sc.energy };
+      state.over = stateIsOver(state, this.cfg);
+      this.overlayReturn = null;
+      this.closeOverlay(); this.closeOverlay();
+      this.startClassic(state);
+      this.toast(`Scenario: ${sc.name}`);
+    });
+    on('devEdit', () => {
+      this.overlayReturn = null;
+      this.closeOverlay(); this.closeOverlay();
+      if (this.screen !== 'game' || this.session.state.mode !== 'classic') this.startClassic();
+      this.editMode = true;
+      $('devBanner').hidden = false;
+    });
+    on('btnEditDone', () => { this.editMode = false; $('devBanner').hidden = true; this.refreshRotateButtons(); });
+    on('devExport', () => {
+      flushAnalytics();
+      const blob = new Blob([exportAnalytics()], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = `bloq-analytics-${Date.now()}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      this.toast('Analytics exported');
+    });
+    on('devReset', () => {
+      Object.values(KEYS).forEach(remove);
+      remove(DEV_KEY);
+      this.dev = defaultDev(); this.applyDev(); this.setupDev();
+      this.stats = parseStats(null);
+      this.toast('Local data reset');
+    });
   }
 
   // ---------------------------------------------------------------- wiring
@@ -480,23 +727,24 @@ export class App {
     on('btnStats', () => { this.renderStats(); this.openOverlay('stats'); });
     on('btnHow', () => this.openOverlay('how'));
     on('btnSettings', () => { this.setupDev(); this.openOverlay('settings'); });
+    on('btnGameSettings', () => { this.view.animator.finish(); this.persist(); this.setupDev(); this.openOverlay('settings'); });
     on('btnPause', () => { this.view.animator.finish(); this.persist(); this.openOverlay('pause'); });
     on('btnResume', () => this.closeOverlay());
     on('btnRestart', () => {
       this.closeOverlay();
       if (this.session.state.mode === 'tutorial') { this.startTutorial(); return; }
-      this.abandon(this.session.state.score, this.elapsedMs);
+      this.abandon(this.session.state.score);
       track('game_restarted');
       this.startClassic();
     });
     on('btnPauseSettings', () => { this.overlayReturn = 'pause'; this.setupDev(); this.openOverlay('settings'); });
     on('btnPauseHome', () => {
       this.closeOverlay();
-      if (this.session.state.mode === 'tutorial') this.view.tutorialTarget = null;
+      if (this.session.state.mode === 'tutorial') { this.view.tutorialTarget = null; this.tutorialIndex = -2; }
       this.persist();
       this.show('home');
     });
-    on('btnSkip', () => { this.view.animator.finish(); this.finishTutorial(true); });
+    on('btnSkip', () => { this.view.animator.finish(); this.tutorialIndex = -2; this.finishTutorial(true); });
     on('btnAgain', () => { this.closeOverlay(); track('game_restarted'); this.startClassic(); });
     on('btnResHome', () => { this.closeOverlay(); this.show('home'); });
     on('btnShare', () => this.share());
@@ -505,6 +753,7 @@ export class App {
       if (this.screen === 'game' && this.session.state.mode === 'classic') this.persist();
       this.startTutorial();
     });
+    this.rotateBtns.forEach((b, slot) => b.addEventListener('click', (e) => { e.preventDefault(); unlockAudio(); this.rotate(slot); }));
     document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => this.closeOverlay()));
     document.querySelectorAll('.overlay').forEach((o) => o.addEventListener('click', (e) => {
       if (e.target === o && o.id !== 'results') this.closeOverlay();
@@ -522,49 +771,16 @@ export class App {
     toggle('setMotion', 'reducedMotion');
     toggle('setContrast', 'highContrast');
 
-    // Developer section: tap the version label five times.
-    let taps = 0;
-    $('version').addEventListener('click', () => {
-      if (++taps >= 5 && !this.devEnabled) { this.devEnabled = true; this.setupDev(); this.toast('Developer tools on'); }
-    });
-    on('devLoad', () => {
-      const sc = SCENARIOS[Number($<HTMLSelectElement>('devScenario').value)];
-      const base = newGame(newSeed(), this.cfg, { board: boardFromArt(sc.board) });
-      const state: GameState = { ...base, tray: sc.tray.map((p) => ({ ...p })) };
-      state.over = isGameOver(state.board, state.tray);
-      this.overlayReturn = null;
-      this.closeOverlay(); this.closeOverlay();
-      this.startClassic(state);
-      this.toast(`Scenario: ${sc.name}`);
-    });
-    on('devEdit', () => {
-      this.overlayReturn = null;
-      this.closeOverlay(); this.closeOverlay();
-      if (this.screen !== 'game' || this.session.state.mode !== 'classic') this.startClassic();
-      this.editMode = true;
-      $('devBanner').hidden = false;
-    });
-    on('btnEditDone', () => { this.editMode = false; $('devBanner').hidden = true; });
-    $<HTMLInputElement>('devPulse').addEventListener('input', (e) => {
-      this.cfg.generation.pulseChance = Number((e.target as HTMLInputElement).value);
-      $('devPulseOut').textContent = `${Math.round(this.cfg.generation.pulseChance * 100)}%`;
-    });
-    on('devExport', () => {
-      flushAnalytics();
-      const blob = new Blob([exportAnalytics()], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = `bloq-analytics-${Date.now()}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      this.toast('Analytics exported');
-    });
-    on('devReset', () => {
-      Object.values(KEYS).forEach(remove);
-      this.stats = parseStats(null);
-      this.toast('Local data reset');
-    });
+    if (!__RELEASE__) {
+      // Development builds: tap the version label five times to show the developer section.
+      let taps = 0;
+      $('version').addEventListener('click', () => {
+        if (++taps >= 5 && !this.devEnabled) { this.devEnabled = true; this.setupDev(); this.toast('Developer tools on'); }
+      });
+      this.bindDev();
+    }
 
-    window.addEventListener('resize', () => { if (this.screen === 'game') this.view.resize(); if (this.screen === 'home') this.refreshHome(); this.wake(); });
-    // First touch anywhere unlocks audio on iOS.
+    window.addEventListener('resize', () => { if (this.screen === 'game') this.layoutGame(); if (this.screen === 'home') this.refreshHome(); this.wake(); });
     window.addEventListener('pointerdown', () => unlockAudio(), { once: true });
   }
 
@@ -578,7 +794,6 @@ export class App {
 
   private lifecycle() {
     const hide = () => {
-      // Resolve any running sequence instantly, then save: the state is already final.
       this.view.animator.finish();
       if (this.screen === 'game') this.persist();
       flushAnalytics();

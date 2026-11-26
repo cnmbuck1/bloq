@@ -1,10 +1,11 @@
-// Canvas art outside gameplay: the BLOQ wordmark, the home screen's animated blocks,
-// the splash, and the shareable results card. All generated locally.
+// Canvas art outside gameplay: the BLOQ wordmark, the home screen's animated blocks, the splash,
+// the shareable results card and the app icon / launch art. All generated locally.
 
 import { drawOrbIcon } from '../brand/cnmbuck-orb';
-import { drawOrbWordmark } from '../brand/orb-wordmark';
-import { drawBlock, roundRect, setRenderScale } from '../render/blocks';
-import { THEME } from '../render/theme';
+import { drawBlock, paintFrame, roundRect, setRenderScale } from '../render/blocks';
+import { THEME, rgba } from '../render/theme';
+
+const FONT = '-apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif';
 
 function fit(canvas: HTMLCanvasElement) {
   const r = canvas.getBoundingClientRect();
@@ -18,51 +19,93 @@ function fit(canvas: HTMLCanvasElement) {
   return { g, w, h };
 }
 
-/** BL(O)Q with the Cnmbuck Orb as the O (studio wordmark helper), plus a row of block-colour ticks beneath. */
-export function drawLogo(g: CanvasRenderingContext2D, cx: number, cy: number, fs: number) {
-  drawOrbWordmark(g, 'BL', 'Q', cx, cy, fs);
-  const s = fs * 0.16, gap = s * 0.35;
-  const total = THEME.blocks.length * s + (THEME.blocks.length - 1) * gap;
-  THEME.blocks.forEach((col, i) => {
-    g.fillStyle = col;
-    roundRect(g, cx - total / 2 + i * (s + gap), cy + fs * 0.72, s, s, s * 0.25); g.fill();
-  });
+/** The O: an illuminated energy ring around a small diamond core (the Pulse, abstracted). */
+export function drawEnergyO(g: CanvasRenderingContext2D, cx: number, cy: number, R: number, t = 0, glow = true) {
+  const sw = R * 0.36;
+  const breathe = 0.5 + 0.5 * Math.sin(t * 0.0025);
+  g.save();
+  // machined outer bezel
+  g.lineWidth = sw + R * 0.1;
+  g.strokeStyle = '#1E2C39';
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+  // lit ring
+  const ring = g.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
+  ring.addColorStop(0, THEME.pulseCore); ring.addColorStop(0.45, THEME.pulse); ring.addColorStop(1, '#1E8C99');
+  if (glow) { g.shadowColor = THEME.pulse; g.shadowBlur = R * (0.5 + 0.2 * breathe); }
+  g.lineWidth = sw * 0.62;
+  g.strokeStyle = ring;
+  g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2); g.stroke();
+  g.shadowBlur = 0;
+  // specular glint on the ring
+  g.strokeStyle = 'rgba(255,255,255,0.7)'; g.lineWidth = sw * 0.14; g.lineCap = 'round';
+  g.beginPath(); g.arc(cx, cy, R, Math.PI * 1.08, Math.PI * 1.42); g.stroke();
+  // diamond core
+  const d = R * 0.3;
+  if (glow) { g.shadowColor = THEME.pulse; g.shadowBlur = R * 0.4; }
+  g.fillStyle = THEME.pulseCore;
+  g.beginPath(); g.moveTo(cx, cy - d); g.lineTo(cx + d, cy); g.lineTo(cx, cy + d); g.lineTo(cx - d, cy); g.closePath(); g.fill();
+  g.restore();
 }
 
-export function paintLogoCanvas(canvas: HTMLCanvasElement) {
+/** BLOQ wordmark: heavy machined-metal letters with the energy ring as the O. */
+export function drawLogo(g: CanvasRenderingContext2D, cx: number, cy: number, fs: number, t = 0) {
+  g.save();
+  g.font = `900 ${fs}px ${FONT}`;
+  g.textBaseline = 'alphabetic';
+  const spacing = fs * 0.06;
+  const capH = fs * 0.72;
+  const baseY = cy + capH / 2;
+  const R = capH * 0.47;
+  const wB = g.measureText('B').width, wL = g.measureText('L').width, wQ = g.measureText('Q').width;
+  const wO = R * 2 + capH * 0.16;
+  const total = wB + wL + wO + wQ + spacing * 3;
+  let x = cx - total / 2;
+  const metal = g.createLinearGradient(0, cy - capH / 2, 0, cy + capH / 2);
+  metal.addColorStop(0, '#F4FAFF'); metal.addColorStop(0.45, '#C3D6E2'); metal.addColorStop(0.55, '#8EA7B8'); metal.addColorStop(1, '#C9DAE5');
+  const letter = (ch: string, w: number) => {
+    g.shadowColor = 'rgba(0,0,0,0.55)'; g.shadowBlur = fs * 0.06; g.shadowOffsetY = fs * 0.03;
+    g.fillStyle = metal; g.fillText(ch, x, baseY);
+    g.shadowColor = 'transparent';
+    g.lineWidth = Math.max(1, fs * 0.012); g.strokeStyle = 'rgba(12,19,29,0.55)'; g.strokeText(ch, x, baseY);
+    x += w + spacing;
+  };
+  letter('B', wB);
+  letter('L', wL);
+  drawEnergyO(g, x + wO / 2, cy, R, t);
+  x += wO + spacing;
+  letter('Q', wQ);
+  g.restore();
+}
+
+export function paintLogoCanvas(canvas: HTMLCanvasElement, t = 0) {
   const { g, w, h } = fit(canvas);
   g.clearRect(0, 0, w, h);
-  drawLogo(g, w / 2, h * 0.42, Math.min(h * 0.6, w * 0.22));
+  drawLogo(g, w / 2, h / 2, Math.min(h * 0.78, w * 0.2), t);
 }
 
-// A small arrangement that gently builds, glows and clears on a loop: a hint of what the game feels like.
+// A small machined arrangement: titanium blocks around a Pulse, with a slow scan of light.
 const ART = [
-  '..0001..',
-  '.22P11..',
-  '.2.334..',
-  '...3P44.',
+  '..XXX...',
+  '.XXPX.X.',
+  '...XXXX.',
+  '..X.X...',
 ];
 
 export function paintHomeArt(canvas: HTMLCanvasElement, t: number, reduced: boolean) {
   const { g, w, h } = fit(canvas);
   g.clearRect(0, 0, w, h);
   const cols = 8, rows = ART.length;
-  const pitch = Math.min(w / (cols + 0.5), h / (rows + 0.6));
+  const pitch = Math.min(w / (cols + 0.6), h / (rows + 0.6));
   const cell = pitch * 0.9;
   const ox = (w - cols * pitch) / 2, oy = (h - rows * pitch) / 2;
-  const cycle = 4200;
-  const phase = reduced ? 0.5 : (t % cycle) / cycle;
+  const scan = reduced ? -10 : ((t % 5200) / 5200) * (cols + rows + 6) - 3;
   ART.forEach((line, r) => [...line].forEach((ch, c) => {
-    const x = ox + c * pitch, y = oy + r * pitch;
-    g.fillStyle = THEME.empty;
-    g.globalAlpha = 0.45;
-    roundRect(g, x, y, cell, cell, cell * 0.17); g.fill();
-    g.globalAlpha = 1;
+    const x = ox + c * pitch + (pitch - cell) / 2, y = oy + r * pitch + (pitch - cell) / 2;
+    g.fillStyle = rgba(THEME.empty, 0.55);
+    roundRect(g, x, y, cell, cell, cell * 0.14); g.fill();
     if (ch === '.') return;
-    const wave = reduced ? 0 : Math.sin(phase * Math.PI * 2 - (c + r) * 0.55);
-    const bob = reduced ? 0 : wave * pitch * 0.05;
-    if (ch === 'P') drawBlock(g, x, y + bob, cell, 0, true, 1, 1, t, reduced);
-    else drawBlock(g, x, y + bob, cell, Number(ch), false, 1, 1, t, reduced);
+    const near = Math.max(0, 1 - Math.abs(c + r - scan) / 1.6);
+    drawBlock(g, x, y, cell, ch === 'P', t, reduced, { bright: near * 0.35 });
   }));
 }
 
@@ -71,11 +114,10 @@ export function paintSplash(canvas: HTMLCanvasElement) {
   g.fillStyle = THEME.bg; g.fillRect(0, 0, w, h);
   const size = Math.min(w, h) * 0.34;
   drawOrbIcon(g, size, w / 2 - size / 2, h / 2 - size * 0.75);
-  g.fillStyle = '#EAF2FF';
-  g.font = `700 ${Math.round(size * 0.13)}px -apple-system, "Helvetica Neue", Arial, sans-serif`;
-  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = THEME.text;
+  g.font = `700 ${Math.round(size * 0.13)}px ${FONT}`;
+  g.textBaseline = 'middle';
   const label = 'CNMBUCK STUDIOS';
-  // letter-spaced
   const sp = size * 0.03;
   const width = [...label].reduce((a, ch) => a + g.measureText(ch).width + sp, -sp);
   let x = w / 2 - width / 2;
@@ -85,6 +127,15 @@ export function paintSplash(canvas: HTMLCanvasElement) {
 
 export interface ShareInfo { score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean }
 
+function background(g: CanvasRenderingContext2D, W: number, H: number) {
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, THEME.bg2); bg.addColorStop(1, THEME.bg);
+  g.fillStyle = bg; g.fillRect(0, 0, W, H);
+  const glow = g.createRadialGradient(W / 2, H * 0.42, 0, W / 2, H * 0.42, W * 0.75);
+  glow.addColorStop(0, 'rgba(89,221,235,0.09)'); glow.addColorStop(1, 'rgba(89,221,235,0)');
+  g.fillStyle = glow; g.fillRect(0, 0, W, H);
+}
+
 /** 1080×1350 results card (Instagram portrait). */
 export function renderShareCard(info: ShareInfo): HTMLCanvasElement {
   const W = 1080, H = 1350;
@@ -92,72 +143,73 @@ export function renderShareCard(info: ShareInfo): HTMLCanvasElement {
   c.width = W; c.height = H;
   const g = c.getContext('2d')!;
   setRenderScale(1);
-  g.fillStyle = THEME.bg; g.fillRect(0, 0, W, H);
-  const glow = g.createRadialGradient(W / 2, H * 0.4, 0, W / 2, H * 0.4, W * 0.7);
-  glow.addColorStop(0, 'rgba(66,181,245,0.18)'); glow.addColorStop(1, 'rgba(20,28,46,0)');
-  g.fillStyle = glow; g.fillRect(0, 0, W, H);
+  background(g, W, H);
 
-  // scattered blocks along the top and bottom edges
-  const deco = [[0, 0, 0], [1, 0, 1], [0, 1, 2], [7, 0, 3], [8, 0, 4], [8, 1, 0], [0, 11.6, 4], [1, 11.6, 3], [8, 11.6, 1], [7, 11.6, 2], [8, 10.6, 0]];
-  for (const [cx, cy, col] of deco) drawBlock(g, 40 + cx * 116, 30 + cy * 105, 100, col, false, 1, 0.9);
-  drawBlock(g, 40 + 1 * 116, 30 + 1 * 105, 100, 0, true, 1, 1, 0, true);
+  // A fragment of board in the top corners: machined blocks and a Pulse.
+  const frag = (x0: number, y0: number, art: string[]) => art.forEach((line, r) => [...line].forEach((ch, col) => {
+    if (ch !== '.') drawBlock(g, x0 + col * 92, y0 + r * 92, 82, ch === 'P', 0, true, { alpha: 0.85 });
+  }));
+  frag(48, 48, ['XX', 'XP']);
+  frag(W - 48 - 174, 48, ['XX', '.X']);
+  frag(48, H - 48 - 82, ['XX']);
+  frag(W - 48 - 174, H - 48 - 82, ['PX']);
 
-  drawLogo(g, W / 2, 300, 150);
+  drawLogo(g, W / 2, 290, 170);
 
+  paintFrame(g, 110, 430, W - 220, 600, 40, 14, true);
   g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillStyle = THEME.textDim;
-  g.font = '700 40px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText(info.newRecord ? 'NEW PERSONAL BEST' : 'SCORE', W / 2, 520);
-  g.fillStyle = '#FFFFFF';
-  g.font = '900 190px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText(info.score.toLocaleString('en-US'), W / 2, 650);
+  g.fillStyle = info.newRecord ? THEME.gold : THEME.textDim;
+  g.font = `700 38px ${FONT}`;
+  g.fillText(info.newRecord ? 'NEW PERSONAL BEST' : 'FINAL SCORE', W / 2, 520);
+  g.fillStyle = THEME.text;
+  g.font = `900 170px ${FONT}`;
+  g.fillText(info.score.toLocaleString('en-US'), W / 2, 645);
 
   const stat = (label: string, value: string, x: number) => {
-    g.fillStyle = '#1E2940';
-    roundRect(g, x - 220, 790, 440, 190, 36); g.fill();
-    g.fillStyle = THEME.textDim; g.font = '700 32px -apple-system, "Helvetica Neue", Arial, sans-serif';
-    g.fillText(label, x, 840);
-    g.fillStyle = '#FFFFFF'; g.font = '800 76px -apple-system, "Helvetica Neue", Arial, sans-serif';
-    g.fillText(value, x, 920);
+    g.fillStyle = 'rgba(28,42,56,0.9)';
+    roundRect(g, x - 190, 770, 380, 200, 30); g.fill();
+    g.strokeStyle = rgba(THEME.gridBorder, 0.9); g.lineWidth = 2;
+    roundRect(g, x - 190, 770, 380, 200, 30); g.stroke();
+    g.fillStyle = THEME.textDim; g.font = `700 30px ${FONT}`;
+    g.fillText(label, x, 825);
+    g.fillStyle = label.includes('CHAIN') ? THEME.pulse : THEME.text; g.font = `800 80px ${FONT}`;
+    g.fillText(value, x, 905);
   };
-  stat('BEST COMBO', `×${info.combo}`, W / 2 - 240);
-  stat('BIGGEST CHAIN', `×${info.chain}`, W / 2 + 240);
+  stat('BIGGEST CHAIN', info.chain ? `×${info.chain}` : '–', W / 2 - 205);
+  stat('HIGHEST COMBO', info.combo ? `×${info.combo}` : '–', W / 2 + 205);
 
-  g.fillStyle = '#FFFFFF';
-  g.font = '800 58px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText('Can you beat my score?', W / 2, 1080);
+  g.fillStyle = THEME.text;
+  g.font = `800 60px ${FONT}`;
+  g.fillText('Can you beat my score?', W / 2, 1120);
 
-  drawOrbIcon(g, 70, W / 2 - 190, 1155);
+  drawOrbIcon(g, 64, W / 2 - 186, 1192);
   g.fillStyle = THEME.textDim; g.textAlign = 'left';
-  g.font = '700 34px -apple-system, "Helvetica Neue", Arial, sans-serif';
-  g.fillText('CNMBUCK STUDIOS', W / 2 - 112, 1191);
+  g.font = `700 32px ${FONT}`;
+  g.fillText('CNMBUCK STUDIOS', W / 2 - 112, 1225);
   return c;
 }
 
-/** App icon (opaque, square): the Orb as hero on BLOQ navy, sitting in a corner of blocks. */
+/** App icon (opaque, square): the Cnmbuck Orb as hero, set into a machined BLOQ board corner. */
 export function renderAppIcon(size = 1024): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
-  g.fillStyle = THEME.bg; g.fillRect(0, 0, size, size);
-  const glow = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size * 0.6);
-  glow.addColorStop(0, 'rgba(66,181,245,0.22)'); glow.addColorStop(1, 'rgba(20,28,46,0)');
-  g.fillStyle = glow; g.fillRect(0, 0, size, size);
-  const cell = size * 0.2, pitch = size * 0.22, o = size * 0.06;
-  const blocks: [number, number, number][] = [[0, 0, 0], [1, 0, 1], [0, 1, 2], [3, 3, 3], [3, 4, 4], [4, 3, 0], [4, 4, 1]];
-  for (const [r, cc, col] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, col, false, 1, 0.95);
-  drawOrbIcon(g, size * 0.78, size * 0.11, size * 0.11);
+  background(g, size, size);
+  const cell = size * 0.19, pitch = size * 0.215, o = size * 0.06;
+  const blocks: [number, number, boolean][] = [[0, 0, false], [0, 1, false], [1, 0, false], [3, 3, false], [3, 4, true], [4, 3, false], [4, 4, false]];
+  for (const [r, cc, p] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, p, 0, true);
+  drawOrbIcon(g, size * 0.74, size * 0.13, size * 0.13);
   return c;
 }
 
-/** Launch screen (square, centre-safe): BL(O)Q wordmark on navy. */
+/** Launch screen (square, centre-safe): the BLOQ wordmark on graphite. */
 export function renderLaunch(size = 2732): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
-  g.fillStyle = THEME.bg; g.fillRect(0, 0, size, size);
-  drawLogo(g, size / 2, size / 2, size * 0.06);
+  background(g, size, size);
+  drawLogo(g, size / 2, size / 2, size * 0.075);
   return c;
 }

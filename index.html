@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#141C2E" />
+  <meta name="theme-color" content="#0C131D" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>BLOQ</title>
@@ -18,52 +18,75 @@
     <section id="home" class="screen" aria-label="BLOQ home">
       <header class="home-top">
         <canvas id="logo" class="logo" role="img" aria-label="BLOQ"></canvas>
-        <p class="tagline">Place. Clear. React.</p>
+        <p class="tagline">Place · Clear · React</p>
       </header>
       <div class="home-center">
         <canvas id="homeArt" class="home-art" aria-hidden="true"></canvas>
         <p class="home-best" id="homeBest"></p>
         <button id="btnPlay" class="btn btn-primary btn-xl">PLAY</button>
-        <button id="btnContinue" class="btn btn-secondary" hidden>Continue</button>
+        <button id="btnContinue" class="btn btn-secondary" hidden>CONTINUE</button>
       </div>
       <nav class="home-bottom" aria-label="Menu">
-        <button class="btn-icon" id="btnStats" aria-label="Statistics"><span class="ico">▦</span><span>Statistics</span></button>
-        <button class="btn-icon" id="btnHow" aria-label="How to play"><span class="ico">?</span><span>How to Play</span></button>
-        <button class="btn-icon" id="btnSettings" aria-label="Settings"><span class="ico">⚙</span><span>Settings</span></button>
+        <button class="btn-icon" id="btnStats" aria-label="Statistics">
+          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></span><span>Statistics</span></button>
+        <button class="btn-icon" id="btnHow" aria-label="How to play">
+          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9.2 9a3 3 0 1 1 4 2.8c-.8.3-1.2 1-1.2 1.8V14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/></svg></span><span>How to Play</span></button>
+        <button class="btn-icon" id="btnSettings" aria-label="Settings">
+          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>Settings</span></button>
       </nav>
       <footer class="studio"><canvas id="studioOrb" aria-hidden="true"></canvas><span>Cnmbuck Studios</span></footer>
     </section>
 
     <section id="game" class="screen" aria-label="Game">
-      <div class="hud-top">
+      <div class="nav-top">
         <button class="btn-round" id="btnPause" aria-label="Pause">
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1.5" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1.5" fill="currentColor"/></svg>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6.5" y="5" width="3.6" height="14" rx="1.4" fill="currentColor"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.4" fill="currentColor"/></svg>
         </button>
-        <div class="score-wrap">
-          <div class="score" id="score" aria-live="polite" aria-label="Score">0</div>
-        </div>
-        <div class="best-wrap" id="bestWrap"><span class="label">BEST</span><span id="best">0</span></div>
+        <canvas id="navLogo" class="nav-logo" role="img" aria-label="BLOQ"></canvas>
+        <button class="btn-round" id="btnGameSettings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
         <button class="btn-skip" id="btnSkip" hidden>Skip</button>
       </div>
-      <div class="hud-combo">
-        <div class="combo" id="combo" aria-live="polite"></div>
-        <div class="message" id="message" aria-live="assertive"></div>
-        <div class="chain" id="chain"></div>
+      <div class="scores" id="scores">
+        <div class="score-block">
+          <span class="label">CURRENT SCORE</span>
+          <span class="score" id="score" aria-live="polite">0</span>
+        </div>
+        <div class="score-block best" id="bestWrap">
+          <span class="label">PERSONAL BEST</span>
+          <span class="best-value" id="best">0</span>
+        </div>
+      </div>
+      <div class="status" id="status">
+        <div class="combo" id="combo" aria-live="polite">
+          <span class="label">COMBO</span>
+          <span class="mult" id="comboMult">×1.0</span>
+          <span class="meter" id="comboMeter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        </div>
+        <div class="chain" id="chain" aria-live="polite"><span class="label">CHAIN</span><span id="chainValue">×0</span></div>
       </div>
       <div class="tutorial" id="tutorial" hidden aria-live="polite">
         <div class="tut-step" id="tutStep"></div>
         <div class="tut-title" id="tutTitle"></div>
         <div class="tut-hint" id="tutHint"></div>
       </div>
-      <canvas id="board" class="board" role="application" aria-label="Game board. Drag pieces from the tray onto the board."></canvas>
-      <div class="dev-banner" id="devBanner" hidden>Board editor: tap cells to cycle empty, block, pulse. <button id="btnEditDone">Done</button></div>
+      <div class="play-area" id="playArea">
+        <canvas id="board" class="board" role="application" aria-label="Game board and piece tray. Drag pieces from the tray onto the board."></canvas>
+        <div class="message" id="message" aria-live="assertive"></div>
+        <button class="rotate-btn" data-slot="0" aria-label="Rotate piece 1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="rotate-btn" data-slot="1" aria-label="Rotate piece 2"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button class="rotate-btn" data-slot="2" aria-label="Rotate piece 3"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      </div>
+      <p class="game-foot">PLACE · CLEAR · REACT</p>
+      <div class="dev-banner" id="devBanner" hidden>Board editor: tap cells to cycle empty, block, Pulse. <button id="btnEditDone">Done</button></div>
     </section>
 
     <!-- Overlays -->
     <div class="overlay" id="pause" hidden role="dialog" aria-modal="true" aria-label="Paused">
       <div class="sheet">
         <h2>Paused</h2>
-        <button class="btn btn-primary" id="btnResume">Resume</button>
+        <button class="btn btn-primary" id="btnResume">RESUME</button>
         <button class="btn btn-secondary" id="btnRestart">Restart</button>
         <button class="btn btn-secondary" id="btnPauseSettings">Settings</button>
         <button class="btn btn-ghost" id="btnPauseHome">Home</button>
@@ -77,8 +100,10 @@
         <p class="res-best" id="resBest"></p>
         <dl class="res-grid">
           <div><dt>Lines cleared</dt><dd id="resLines">0</dd></div>
-          <div><dt>Largest combo</dt><dd id="resCombo">0</dd></div>
-          <div><dt>Biggest chain</dt><dd id="resChain">0</dd></div>
+          <div><dt>Largest clear</dt><dd id="resMaxLines">0</dd></div>
+          <div><dt>Highest combo</dt><dd id="resCombo">0</dd></div>
+          <div><dt>Biggest chain</dt><dd id="resChain" class="cyan">0</dd></div>
+          <div><dt>Rotations</dt><dd id="resRot">0</dd></div>
           <div><dt>Time</dt><dd id="resTime">0:00</dd></div>
         </dl>
         <button class="btn btn-primary btn-xl" id="btnAgain">PLAY AGAIN</button>
@@ -93,7 +118,7 @@
       <div class="sheet">
         <h2>Statistics</h2>
         <dl class="stat-grid" id="statGrid"></dl>
-        <button class="btn btn-primary" data-close>Done</button>
+        <button class="btn btn-primary" data-close>DONE</button>
       </div>
     </div>
 
@@ -101,13 +126,14 @@
       <div class="sheet">
         <h2>How to Play</h2>
         <ol class="how-list">
-          <li><b>Drag</b> the three pieces onto the 8×8 board, in any order. They don't rotate.</li>
+          <li><b>Drag</b> the three pieces onto the 8×8 board, in any order.</li>
           <li><b>Fill</b> a whole row or column to clear it. Several at once score much more.</li>
           <li><b>Clear on consecutive moves</b> to build a combo, up to ×3.</li>
-          <li><span class="pulse-chip" aria-hidden="true">◆</span> <b>Pulse Blocks</b> clear the 8 cells around them when their line clears. A blast that hits another Pulse sets it off too: plan chains.</li>
-          <li>The game ends when none of your pieces fit.</li>
+          <li><span class="pulse-chip" aria-hidden="true">◆</span> <b>Pulse Blocks</b> clear the 8 cells around them when their line clears. A blast that hits another Pulse sets it off too.</li>
+          <li><span class="rot-chip" aria-hidden="true">⟳</span> <b>Rotate</b> a piece with its button. Each turn uses 1 Rotation Energy; each line you clear restores 1, up to 3.</li>
+          <li>The game ends when none of your pieces fit, even with the rotations you can afford.</li>
         </ol>
-        <button class="btn btn-primary" id="btnTutorial">Play the tutorial</button>
+        <button class="btn btn-primary" id="btnTutorial">PLAY THE TUTORIAL</button>
         <button class="btn btn-ghost" data-close>Close</button>
       </div>
     </div>
@@ -121,15 +147,24 @@
         <label class="toggle"><span>High contrast</span><input type="checkbox" id="setContrast" /><i></i></label>
         <div class="dev" id="devSection" hidden>
           <h3>Developer</h3>
+          <label class="field"><span>Rotation mode</span><select id="devRotMode"><option value="energy">Energy-based</option><option value="unlimited">Unlimited</option><option value="none">No rotation</option></select></label>
+          <label class="field"><span>Starting charges</span><input id="devStart" type="number" min="0" max="9" /></label>
+          <label class="field"><span>Max charges</span><input id="devMax" type="number" min="1" max="9" /></label>
+          <label class="field"><span>Rotation cost</span><input id="devCost" type="number" min="0" max="3" /></label>
+          <label class="field"><span>Energy per line</span><input id="devPerLine" type="number" min="0" max="3" /></label>
+          <label class="field"><span>Pulse chance</span><input id="devPulse" type="range" min="0" max="0.4" step="0.01" /><output id="devPulseOut"></output></label>
+          <label class="field"><span>Single clear</span><input id="devClear" type="range" min="200" max="350" step="10" /><output id="devClearOut"></output></label>
+          <label class="field"><span>Particles</span><select id="devParticles"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <label class="field"><span>Haptic intensity</span><select id="devHaptic"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <p class="dev-note">Rotation settings apply from the next game.</p>
           <label class="field"><span>Scenario</span><select id="devScenario"></select></label>
           <button class="btn btn-secondary" id="devLoad">Load scenario</button>
           <button class="btn btn-secondary" id="devEdit">Board editor</button>
-          <label class="field"><span>Pulse chance</span><input id="devPulse" type="range" min="0" max="0.5" step="0.01" /><output id="devPulseOut"></output></label>
           <button class="btn btn-secondary" id="devExport">Export analytics</button>
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
-        <button class="btn btn-primary" data-close>Done</button>
-        <p class="version" id="version">BLOQ Build 1</p>
+        <button class="btn btn-primary" data-close>DONE</button>
+        <p class="version" id="version">BLOQ Build 2</p>
       </div>
     </div>
 
