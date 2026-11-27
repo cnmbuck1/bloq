@@ -53,10 +53,17 @@ npm run simulate       # balancing bot: 300 games per rotation mode, writes sim-
 
 ### iPhone
 
-Needs a Mac with Xcode.
+The Xcode project is committed in `ios/` (Capacitor 8, Swift Package Manager, iPhone only, portrait). The
+Game Center plugin lives in `ios/App/App/GameCenterPlugin.swift` and is registered by
+`BloqBridgeViewController`.
+
+**TestFlight without a Mac**: `.github/workflows/testflight.yml` runs on GitHub's macOS runners. It builds the
+release bundle, archives with Xcode cloud signing and uploads to App Store Connect. It needs four repository
+secrets, listed at the top of that file. Without them it still compiles the app unsigned, as a build check.
+
+On a Mac with Xcode:
 
 ```sh
-npx cap add ios        # first time only: creates ios/
 npm run ios:sync       # release build + copy into the Xcode project
 npm run ios:open
 ```
