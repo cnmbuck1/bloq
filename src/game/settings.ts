@@ -7,6 +7,8 @@ export interface Settings {
   haptics: boolean;
   reducedMotion: boolean;
   highContrast: boolean;
+  /** Build 6: fewer particles and no ambient background motion (older devices, battery). */
+  reducedEffects: boolean;
   /** Build 4: optional ambient music, and separate music / sound-effect levels (0..1). */
   music: boolean;
   musicVolume: number;
@@ -21,7 +23,7 @@ function systemHighContrast() {
 }
 
 export function loadSettings(): Settings {
-  const defaults: Settings = { sound: true, haptics: true, reducedMotion: systemReducedMotion(), highContrast: systemHighContrast(), music: true, musicVolume: 0.5, sfxVolume: 0.8 };
+  const defaults: Settings = { sound: true, haptics: true, reducedMotion: systemReducedMotion(), highContrast: systemHighContrast(), reducedEffects: false, music: true, musicVolume: 0.5, sfxVolume: 0.8 };
   try {
     const raw = load(KEYS.settings);
     if (raw) return { ...defaults, ...JSON.parse(raw) };

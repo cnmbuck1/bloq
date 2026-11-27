@@ -12,7 +12,9 @@ import type { MoveResult } from '../engine/game';
 import type { PulseWave } from '../engine/pulse';
 import { setMaterial, type MaterialLook } from './blocks';
 
-export interface Dying { k: number; cell: Cell; start: number; dur: number; brightFrom: number }
+export interface Dying { k: number; cell: Cell; start: number; dur: number; brightFrom: number; /** Build 6: shard travel and push direction (cells). */ power?: number; dir?: [number, number]; od?: boolean }
+/** Build 6: energy released by a clear, flying into the Overdrive meter (board cell units at launch). */
+export interface Mote { r: number; c: number; start: number; dur: number; share: number; seed: number; gold: boolean }
 export interface Shock { r: number; c: number; start: number; dur: number; wave: number }
 export interface Charge { k: number; start: number; dur: number }
 export interface Bolt { fr: number; fc: number; tr: number; tc: number; start: number; dur: number; seed: number }
@@ -29,6 +31,8 @@ export interface AnimationHooks {
   onWave?(index: number, wave: PulseWave, result: MoveResult): void;
   /** An energy orb reached the meter (one per restored charge). */
   onEnergy?(seg: number): void;
+  /** Build 6: an Overdrive mote reached the meter. */
+  onOdMote?(): void;
   /** Build 3: every clear and chain has finished and the move gained one or more levels. */
   onLevelUp?(result: MoveResult): void;
   onDone?(result: MoveResult): void;
@@ -60,6 +64,15 @@ export class Animator {
   particles: Particle[] = [];
   floats: FloatText[] = [];
   orbs: EnergyOrb[] = [];
+  /** Build 6: Overdrive energy in flight, the charge it still owes the meter, and recent arrivals (meter flash). */
+  motes: Mote[] = [];
+  pendingOd = 0;
+  odArrivals: number[] = [];
+  /** Build 6: soft light left in the cleared lines (fades after the shards), and the placement energy pulse. */
+  afterglow: { cells: number[]; start: number; dur: number; strength: number; od: boolean } | null = null;
+  placePulse: { cells: number[]; start: number; dur: number } | null = null;
+  /** Build 6: last time the board released energy (the background and perimeter brighten briefly). */
+  energyAt = -1e9; energyAmt = 0;
   /** Frame celebration: cyan for 4+ lines, champagne gold for a level-up. */
   celebrate: { start: number; dur: number; gold?: boolean } | null = null;
   materialWave: MaterialWave | null = null;
@@ -77,6 +90,8 @@ export class Animator {
   arrivals: { seg: number; t: number; gold: boolean }[] = [];
 
   reduced = false;
+  /** Build 6 reduced effects: half the particles, no screen-wide flash. */
+  lowFx = false;
   showPoints = true;
   /** Dev: particle multiplier (0.5 low, 1 medium, 1.6 high). */
   particleScale = 1;
@@ -93,7 +108,7 @@ export class Animator {
   get active() {
     return this.busy || this.dying.length > 0 || this.particles.length > 0 || this.shocks.length > 0 || this.floats.length > 0
       || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0 || !!this.materialWave || this.arrivals.length > 0
-      || !!this.contact || !!this.perfectWave || !!this.odWave || !!this.flash;
+      || !!this.contact || !!this.perfectWave || !!this.odWave || !!this.flash || this.motes.length > 0 || !!this.afterglow || !!this.placePulse || this.odArrivals.length > 0;
   }
 
   play(result: MoveResult, now: number, hooks: AnimationHooks, opts: PlayOptions = {}) {
@@ -108,6 +123,8 @@ export class Animator {
     this.odMove = !!opts.overdrive;
     // Contact highlight along the placed piece as it locks in (100–150 ms).
     this.contact = { cells: result.placed, start: now + 40, dur: 130 };
+    // Build 6: a short energy pulse spreads under the placed piece (150–250 ms).
+    this.placePulse = { cells: result.placed, start: now + 30, dur: 220 };
     // Restored charges stay off the meter until their energy arrives (lines first, then any level-up).
     this.pendingEnergy = result.energyGained + (result.levelEnergy ?? 0);
 
@@ -129,23 +146,59 @@ export class Animator {
     const midR = pr.reduce((a, b) => a + b, 0) / pr.length, midC = pc.reduce((a, b) => a + b, 0) / pc.length;
     const multi = lines > 1;
 
-    // 1. completed lines illuminate; 2. energy travels along them from the placed piece
+    // Build 6 line clear.
+    // 1. Anticipation: the completed lines light up and their crystals brighten (energy builds).
+    // 2. Release: a shockwave runs out from the placed piece along each line; each crystal fractures as the front
+    //    reaches it and its shards dissolve into light.
+    // 3. Reward: points rise from the cleared area, released energy flies into the Overdrive meter, the lines keep
+    //    a fading glow. 4. Recovery: everything is gone within about half a second; play is never held up.
     const strength = Math.min(1 + (lines - 1) * 0.45, 2.4);
+    const od = this.odMove;
     this.glowCells = { cells: result.lineCells, start: T(0), dur: (multi ? 300 : 250) * k, strength };
-    const sweepDur = (multi ? 200 : 170) * k;
-    for (const r of result.rows) this.sweeps.push({ kind: 'row', i: r, origin: midC, start: T(30), dur: sweepDur, strength });
-    for (const c of result.cols) this.sweeps.push({ kind: 'col', i: c, origin: midR, start: T(30), dur: sweepDur, strength });
+    const sweepDur = (multi ? 230 : 200) * k;
+    const shockAt0 = 60;
+    for (const r of result.rows) this.sweeps.push({ kind: 'row', i: r, origin: midC, start: T(shockAt0), dur: sweepDur, strength });
+    for (const c of result.cols) this.sweeps.push({ kind: 'col', i: c, origin: midR, start: T(shockAt0), dur: sweepDur, strength });
     if (result.rows.length && result.cols.length) {
       for (const r of result.rows) for (const c of result.cols) this.flares.push({ r, c, start: T(120), dur: 300 * k });
     }
     if (lines >= 4) this.celebrate = { start: T(60), dur: 750 * k };
-
-    // 3. blocks brighten, 4. break into shards, 5. score counts, 6. energy flows to the meter
+    if (lines >= 4 && !this.reduced && !this.lowFx) this.flash = { start: T(140), dur: 360, color: od ? '#FFF3D1' : '#C6FFFF', amount: 0.1 + 0.03 * Math.min(4, lines - 3) };
     const clearAt = multi ? 240 : 190;
+    // Each crystal breaks when the front reaches it: distance from the placement along its line.
+    const power = 1 + Math.min(1.2, (lines - 1) * 0.3) + (od ? 0.25 : 0);
+    const breakAt = new Map<number, { t: number; dir: [number, number] }>();
+    const addLine = (cells: number[], along: (k: number) => number, origin: number, kind: 'row' | 'col') => {
+      for (const kk of cells) {
+        const pos = along(kk), dist = Math.abs(pos - origin);
+        const t0 = shockAt0 + 40 + (dist / 8) * sweepDur / k * 0.9;
+        const sgn = pos === origin ? 0 : Math.sign(pos - origin);
+        const dir: [number, number] = kind === 'row' ? [sgn, 0] : [0, sgn];
+        const prev = breakAt.get(kk);
+        if (!prev || t0 < prev.t) breakAt.set(kk, { t: t0, dir });
+      }
+    };
+    for (const r of result.rows) addLine(Array.from({ length: n }, (_, c) => r * n + c), (kk) => kk % n, midC, 'row');
+    for (const c of result.cols) addLine(Array.from({ length: n }, (_, r) => r * n + c), (kk) => Math.floor(kk / n), midR, 'col');
+    const b0 = result.boardAfterPlace;
+    for (const kk of result.lineCells) {
+      const cell = b0.cells[kk];
+      const info = breakAt.get(kk);
+      if (!cell || !info || this.hidden.has(kk)) continue;
+      // Pulse Blocks in a line keep their own sequence (they fire with the wave timing below).
+      if (cell.pulse) continue;
+      this.hidden.add(kk);
+      const start = T(info.t);
+      this.dying.push({ k: kk, cell, start, dur: (multi ? 330 : 290) * k, brightFrom: T(0), power, dir: info.dir, od });
+      this.at(start, () => this.shatter(kk, n, cell, power, od, start));
+    }
     this.at(T(clearAt), () => {
+      // Pulse Blocks in the lines break with the old timing (their wave follows); points and hooks as before.
       this.kill(result.lineCells, T(clearAt), 150 * k, result.boardAfterPlace, T(clearAt - 70), lines >= 3 ? 1.4 : 1);
-      if (this.showPoints) this.floats.push({ text: `+${result.points.total.toLocaleString('en-US')}`, r: midR, c: midC, start: T(clearAt), dur: 950, big: result.points.total >= 1000 || lines >= 2, gold: this.odMove || result.perfect });
+      if (this.showPoints) this.floats.push({ text: `+${result.points.total.toLocaleString('en-US')}`, r: midR, c: midC, start: T(clearAt - 40), dur: 950, big: result.points.total >= 1000 || lines >= 2, gold: this.odMove || result.perfect });
       this.hooks.onLines?.(result);
+      this.energyAt = T(clearAt - 60); this.energyAmt = Math.min(1, 0.35 + lines * 0.2 + (od ? 0.2 : 0));
+      this.afterglow = { cells: result.lineCells, start: T(clearAt), dur: 420 * k, strength, od };
       if (!this.reduced && lines >= 3) this.shake = { start: T(clearAt), dur: 220, amp: Math.min(1.5 + lines * 0.6, 4.5) };
       // energy orbs: one per restored charge, from the cleared lines to the meter segments that light up
       const before = (result.energyAfterLines ?? result.energyAfter) - result.energyGained;
@@ -155,6 +208,7 @@ export class Animator {
         const orb: EnergyOrb = { r: src.r, c: src.c, seg: before + i, start: T(clearAt) + i * 90, dur: 420 };
         this.orbs.push(orb);
       }
+      this.launchMotes(result, T(clearAt - 20));
     });
 
     // Perfect Board Clear: a gold-and-cyan wave from the centre once the last block has gone (800–1200 ms).
@@ -207,6 +261,37 @@ export class Animator {
     this.flash = { start: now, dur: 360, color: '#E6C47E', amount: 0.14 };
     if (!this.reduced) {
       for (const [r, c] of [[0, 0], [0, 7], [7, 0], [7, 7]]) this.burst(r + 0.5, c + 0.5, 10, 'gold', now + 120);
+    }
+  }
+
+  /** Build 6: a crystal shatters: a few bright crystal chips and fine sparks (bounded). */
+  private shatter(k: number, n: number, cell: Cell, power: number, od: boolean, start: number) {
+    if (this.reduced || this.particles.length > (this.lowFx ? 220 : 560)) return;
+    if (this.lowFx && (k & 1)) return;
+    const r = Math.floor(k / n), c = k % n;
+    const count = Math.round((5 + 3 * power) * this.particleScale);
+    for (let i = 0; i < count; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 1.4 + Math.random() * 2.6 * power;
+      this.particles.push({
+        x: c + 0.5 + (Math.random() - 0.5) * 0.5, y: r + 0.5 + (Math.random() - 0.5) * 0.5, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.8,
+        born: start, life: 240 + Math.random() * 260, size: 0.04 + Math.random() * 0.07,
+        hue: cell.pulse ? 'cyan' : i % 4 === 0 ? 'white' : od && i % 2 === 1 ? 'gold' : 'ti', spin: Math.random() * 8,
+      });
+    }
+  }
+
+  /** Build 6: the clear's Overdrive charge leaves the board as motes that the meter absorbs on arrival. */
+  private launchMotes(result: MoveResult, start: number) {
+    this.pendingOd = 0;
+    const gained = result.odGained ?? 0;
+    if (gained <= 0 || result.odActive) return;
+    const n = result.boardAfterPlace.size;
+    const src = result.lineCells.length ? result.lineCells : result.placed;
+    const count = Math.max(3, Math.min(12, Math.round(gained / 4)));
+    this.pendingOd = gained;
+    for (let i = 0; i < count; i++) {
+      const kk = src[Math.floor((i / count) * src.length)];
+      this.motes.push({ r: Math.floor(kk / n), c: kk % n, start: start + i * 22, dur: (this.reduced ? 260 : 460) + Math.random() * 120, share: gained / count, seed: Math.random() * 100, gold: (result.odChargeAfter ?? 0) >= 100 });
     }
   }
 
@@ -285,6 +370,7 @@ export class Animator {
     for (const o of this.orbs) this.hooks.onEnergy?.(o.seg);
     this.orbs = [];
     this.pendingEnergy = 0;
+    this.motes = []; this.pendingOd = 0;
     if (this.materialWave) { setMaterial(this.materialWave.to); this.materialWave = null; }
     this.complete();
   }
@@ -307,6 +393,17 @@ export class Animator {
       return false;
     });
     this.arrivals = this.arrivals.filter((a) => now < a.t + 1300);
+    this.motes = this.motes.filter((m) => {
+      if (now < m.start + m.dur) return true;
+      this.pendingOd = Math.max(0, this.pendingOd - m.share);
+      this.odArrivals.push(now);
+      this.hooks.onOdMote?.();
+      return false;
+    });
+    if (!this.motes.length) this.pendingOd = 0;
+    this.odArrivals = this.odArrivals.filter((t) => now < t + 500);
+    if (this.afterglow && now > this.afterglow.start + this.afterglow.dur) this.afterglow = null;
+    if (this.placePulse && now > this.placePulse.start + this.placePulse.dur) this.placePulse = null;
     if (this.glowCells && now > this.glowCells.start + this.glowCells.dur) this.glowCells = null;
     if (this.celebrate && now > this.celebrate.start + this.celebrate.dur) this.celebrate = null;
     if (this.materialWave && now > this.materialWave.start + this.materialWave.dur) { setMaterial(this.materialWave.to); this.materialWave = null; }

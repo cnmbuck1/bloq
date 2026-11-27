@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 
-export type BlockStyle = 'b4' | 'b5b' | 'b5c';
+export type BlockStyle = 'b4' | 'b5b' | 'b5c' | 'b6';
 export interface Look3D { color: string; highlight: string; shadow: string }
 
 /** Sprite padding as a fraction of the cell (room for the contact shadow); must match blocks.ts MARGIN. */
@@ -89,15 +89,6 @@ function roundedSquare(half: number, r: number, hole?: THREE.Path): THREE.Shape 
   s.lineTo(-half, -half + r); s.quadraticCurveTo(-half, -half, -half + r, -half);
   if (hole) s.holes.push(hole);
   return s;
-}
-function roundedPath(half: number, r: number): THREE.Path {
-  const p = new THREE.Path();
-  p.moveTo(-half + r, -half);
-  p.quadraticCurveTo(-half, -half, -half, -half + r); p.lineTo(-half, half - r);
-  p.quadraticCurveTo(-half, half, -half + r, half); p.lineTo(half - r, half);
-  p.quadraticCurveTo(half, half, half, half - r); p.lineTo(half, -half + r);
-  p.quadraticCurveTo(half, -half, half - r, -half); p.lineTo(-half + r, -half);
-  return p;
 }
 
 /** A tile: outer half-size `half`, body thickness `depth`, chamfer `bevel` wide and `bevelH` tall. */
@@ -264,40 +255,48 @@ function energyCrystal(size: number, z: number): THREE.Group {
   return g;
 }
 
-/** 5C: a cut crystal in a thin metal bezel, over a faceted pavilion that the crystal refracts. */
-function crystalBlock(look: Look3D, pulse: boolean): THREE.Group {
+/**
+ * 5C / Build 6 energy crystal: a precision-cut crystal with real thickness, seated in a low smoked-metal base.
+ * Light comes from the upper left: the left and top crown facets catch it, the front table carries the rich
+ * material colour, and the right and front girdle walls fall into shade to show the crystal's depth. A faint
+ * emissive core under the table gives the subtle internal illumination; mirror pavilion facets below it give the
+ * crystal its inner sparkle through refraction. `od` (Overdrive) warms and strengthens the inner light.
+ */
+function crystalBlock(look: Look3D, pulse: boolean, od = false): THREE.Group {
   const grp = new THREE.Group();
   const tint = pulse ? '#59DDEB' : look.color;
   const hi = pulse ? '#C6FFFF' : look.highlight;
   const deep = pulse ? '#0B4F5C' : look.shadow;
-  // Bezel: a polished metal frame, slightly tinted by the crystal it holds.
-  const bezelMat = new THREE.MeshPhysicalMaterial({ color: lerpCol('#6E7884', tint, 0.25), metalness: 1, roughness: 0.3, clearcoat: 0.2, clearcoatRoughness: 0.15, envMapIntensity: 0.5 });
-  grp.add(new THREE.Mesh(tile(0.47, 0.1, 0.1, 0.035, 0.035, 3, roundedPath(0.4, 0.05)), bezelMat));
-  // Seat under the crystal (dark, so the crystal reads deep rather than milky).
-  const seat = new THREE.Mesh(tile(0.43, 0.08, 0.02, 0.01, 0.01, 1), new THREE.MeshStandardMaterial({ color: lerpCol(deep, '#000000', 0.55), metalness: 0.2, roughness: 0.6 }));
-  seat.position.z = -0.14; grp.add(seat);
-  // Pavilion: polished mirror facets beneath the crystal. Seen through it, each facet reflects a different part of
-  // the studio, which gives the block its inner brilliance.
-  const pav = new THREE.Mesh(pavilionGeometry(0.42, 0.09, 0.17), new THREE.MeshPhysicalMaterial({
-    color: lerpCol(tint, hi, 0.2), metalness: 0.75, roughness: 0.22, emissive: col(tint), emissiveIntensity: pulse ? 0.55 : 0.42, flatShading: true, envMapIntensity: 1.6,
+  const inner = od && !pulse ? lerpCol(tint, '#FFD98A', 0.28) : col(tint);
+  // Base: a low, dark smoked-metal seat, slightly tinted by the crystal (no bright frame around the block).
+  const baseMat = new THREE.MeshPhysicalMaterial({ color: lerpCol('#2A3340', deep, 0.35), metalness: 0.9, roughness: 0.38, clearcoat: 0.3, clearcoatRoughness: 0.2, envMapIntensity: 0.55 });
+  grp.add(new THREE.Mesh(tile(0.475, 0.11, 0.05, 0.03, 0.025, 3), baseMat));
+  // Pavilion: polished mirror facets under the crystal: its inner sparkle through refraction.
+  const pav = new THREE.Mesh(pavilionGeometry(0.43, 0.1, 0.16), new THREE.MeshPhysicalMaterial({
+    color: lerpCol(tint, hi, 0.15), metalness: 0.7, roughness: 0.24, emissive: inner, emissiveIntensity: (pulse ? 0.6 : 0.4) * (od ? 1.5 : 1),
+    flatShading: true, envMapIntensity: 1.5,
   }));
-  pav.position.z = -0.1;
+  pav.position.z = -0.08;
   grp.add(pav);
-  // The crystal.
+  // Inner light: a soft emissive slab just under the table.
+  const glow = new THREE.Mesh(tile(0.26, 0.08, 0.02, 0.06, 0.03, 4), new THREE.MeshBasicMaterial({ color: lerpCol(tint, hi, 0.35).multiplyScalar(od ? 1.0 : 0.75), transparent: true, opacity: od ? 0.55 : 0.38 }));
+  glow.position.z = 0.12;
+  grp.add(glow);
+  // The crystal: a tall girdle (its side walls show the thickness) under a faceted crown and table.
   const crystalMat = new THREE.MeshPhysicalMaterial({
-    color: lerpCol(tint, hi, 0.4), metalness: 0, roughness: 0.02, transmission: 1, thickness: 0.1, ior: 1.5,
-    attenuationColor: lerpCol(tint, hi, 0.2), attenuationDistance: 0.5, specularIntensity: 1, specularColor: col('#ffffff'),
-    iridescence: 0.4, iridescenceIOR: 1.4, dispersion: 3, envMapIntensity: 1.5, flatShading: true,
+    color: lerpCol(tint, hi, 0.35), metalness: 0, roughness: 0.03, transmission: 1, thickness: 0.18, ior: 1.55,
+    attenuationColor: lerpCol(tint, deep, 0.15), attenuationDistance: 0.42, specularIntensity: 1, specularColor: col('#ffffff'),
+    iridescence: 0.25, iridescenceIOR: 1.35, dispersion: 2, envMapIntensity: 1.35, flatShading: true,
   });
-  const gem = new THREE.Mesh(gemGeometry(0.415, 0.09, 0.06, 0.12, 0.5), crystalMat);
-  gem.position.z = 0.1;
+  const gem = new THREE.Mesh(gemGeometry(0.455, 0.1, 0.11, 0.11, 0.56), crystalMat);
+  gem.position.z = 0.05;
   grp.add(gem);
   if (pulse) {
     // The energy core sits inside the crystal, so the crystal's facets refract and frame it.
-    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), new THREE.MeshPhysicalMaterial({
-      color: col('#7FF0FF'), emissive: col('#59DDEB'), emissiveIntensity: 1.6, roughness: 0.1, metalness: 0, flatShading: true,
+    const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), new THREE.MeshPhysicalMaterial({
+      color: col('#7FF0FF'), emissive: col('#59DDEB'), emissiveIntensity: 1.7, roughness: 0.1, metalness: 0, flatShading: true,
     }));
-    core.scale.set(1, 1, 0.5); core.position.z = 0.15;
+    core.scale.set(1, 1, 0.5); core.position.z = 0.16;
     grp.add(core);
   }
   return grp;
@@ -317,9 +316,9 @@ const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 50);
  * Renders one block sprite: a canvas of `px` × `px` device pixels covering the cell plus MARGIN_3D on every side,
  * with the soft contact shadow painted underneath. Returns null if WebGL is unavailable.
  */
-export function renderBlock3D(style: 'b5b' | 'b5c', pulse: boolean, look: Look3D, px: number, opts: { shadow?: number; highContrast?: boolean } = {}): HTMLCanvasElement | null {
+export function renderBlock3D(style: 'b5b' | 'b5c', pulse: boolean, look: Look3D, px: number, opts: { shadow?: number; highContrast?: boolean; od?: boolean } = {}): HTMLCanvasElement | null {
   if (!available3D() || !renderer) return null;
-  const model = style === 'b5b' ? (pulse ? metalPulse() : metalBlock(look)) : crystalBlock(look, pulse);
+  const model = style === 'b5b' ? (pulse ? metalPulse() : metalBlock(look)) : crystalBlock(look, pulse, !!opts.od);
   // Height of the model's top, to frame the camera on its projected centre.
   const box = new THREE.Box3().setFromObject(model);
   const zt = box.max.z;
@@ -330,7 +329,9 @@ export function renderBlock3D(style: 'b5b' | 'b5c', pulse: boolean, look: Look3D
   camera.left = -half; camera.right = half; camera.top = half; camera.bottom = -half;
   camera.updateProjectionMatrix();
   const target = new THREE.Vector3(0, 0, zt / 2);
-  camera.position.set(0, -Math.sin(t) * 10, Math.cos(t) * 10).add(target);
+  // Seen slightly from the lower right (crystal) or from the front (metal), so the shaded walls show on those sides.
+  const tx = style === 'b5c' ? t * 0.75 : 0, ty = style === 'b5c' ? t * 0.75 : t;
+  camera.position.set(Math.sin(tx) * 10, -Math.sin(ty) * 10, Math.cos(Math.hypot(tx, ty)) * 10).add(target);
   camera.up.set(0, 1, 0);
   camera.lookAt(target);
   const ss = Math.min(1024, Math.ceil(px * 2)); // supersample, then let the 2D canvas filter down
@@ -350,10 +351,11 @@ export function renderBlock3D(style: 'b5b' | 'b5c', pulse: boolean, look: Look3D
     g.save();
     g.filter = `blur(${cell * 0.06}px)`;
     g.fillStyle = `rgba(0,0,0,${Math.min(0.85, 0.62 * sh)})`;
-    rr(g, m + cell * 0.05, m + cell * 0.1, cell * 0.92, cell * 0.92, cell * 0.12); g.fill();
+    const ox = style === 'b5c' ? cell * 0.05 : cell * 0.01;
+    rr(g, m + cell * 0.04 + ox, m + cell * 0.1, cell * 0.92, cell * 0.92, cell * 0.12); g.fill();
     g.filter = `blur(${cell * 0.14}px)`;
     g.fillStyle = `rgba(0,0,0,${Math.min(0.6, 0.35 * sh)})`;
-    rr(g, m + cell * 0.04, m + cell * 0.16, cell * 0.96, cell * 0.92, cell * 0.16); g.fill();
+    rr(g, m + cell * 0.03 + ox * 1.6, m + cell * 0.16, cell * 0.96, cell * 0.92, cell * 0.16); g.fill();
     g.restore();
   }
   g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';

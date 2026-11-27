@@ -33,7 +33,7 @@ import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
 import { DEFAULT_VISUALS, currentMaterial, setBlockStyle, setHighContrast, type BlockStyle, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
-import { paintDailyArt, paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
+import { paintDailyPreview, paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
 import { InputController } from './ui/input';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -359,6 +359,10 @@ export class App {
    * figures, this week's strip and the countdown, all inside the safe area with no scrolling. Everything else
    * (the month calendar and detailed records) lives on the history screen.
    */
+  private previewDay: { id: string; cells: ({ pulse?: boolean } | null)[] } | null = null;
+
+  private dhTimer = 0;
+
   private renderDailyHub() {
     const id = this.today();
     const day = this.daily.days[id];
@@ -381,7 +385,25 @@ export class App {
       `<div class="wk ${d.state}${d.isToday ? ' is-today' : ''}" role="listitem" aria-label="${dayLabel(d.id, false)}, ${d.isToday && d.state === 'completed' ? 'today, completed' : word[d.state]}">`
       + `<span class="wk-dow">${DOW[d.dow]}</span><span class="wk-dot">${d.isToday && d.state !== 'completed' ? '<i></i>' : sym[d.state]}</span></div>`).join('');
     $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
-    requestAnimationFrame(() => { if (this.overlay === 'dailyHub') paintDailyArt($<HTMLCanvasElement>('dhArt')); });
+    // Build 6: the countdown stays live while the screen is open (and the screen refreshes itself at the UTC reset).
+    clearInterval(this.dhTimer);
+    this.dhTimer = window.setInterval(() => {
+      if (this.overlay !== 'dailyHub') { clearInterval(this.dhTimer); return; }
+      if (this.today() !== id) { this.renderDailyHub(); return; }
+      $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
+    }, 20000);
+    // Completion animation: today's mark pops the first time this screen shows it completed.
+    if (day?.completed && load('bloq.dailyPop') !== id) {
+      store('bloq.dailyPop', id);
+      document.querySelector('#dhWeek .wk.is-today')?.classList.add('just-done');
+    }
+    // Build 6: today's actual starting board (generated once per day, the same puzzle the Start button plays).
+    if (this.previewDay?.id !== id) {
+      const cfg = { ...this.cfg, daily: { ...this.cfg.daily, placementLimit: limit } };
+      this.previewDay = { id, cells: dailyChallenge(id, cfg).board.cells };
+    }
+    const cells = this.previewDay.cells;
+    requestAnimationFrame(() => { if (this.overlay === 'dailyHub') paintDailyPreview($<HTMLCanvasElement>('dhArt'), cells); });
   }
 
   /** The secondary screen: full month calendar, detailed streak figures and personal records. Scrolls if needed. */
@@ -581,6 +603,7 @@ export class App {
         if (i === r.waves.length - 1) this.celebrate(r, 'chain');
       },
       onEnergy: (seg) => { sfx.energy(seg); this.refreshRotateButtons(); this.wake(); },
+      onOdMote: () => { sfx.odAbsorb(this.session.state.od?.charge ?? 0); },
       onLevelUp: (r) => this.levelUp(r, fromMat.id !== toMat.id ? this.cfg.materials.find((m) => m.id === toMat.id) ?? null : null),
       onDone: (r) => this.afterResolution(r),
     }, { material: fromMat.id !== toMat.id ? { from: fromMat, to: toMat } : undefined, levelMs: this.dev.levelMs, materialMs: this.dev.materialMs, overdrive: result.odActive });
@@ -837,6 +860,39 @@ export class App {
     this.gameOver();
   }
 
+  /**
+   * Build 6 results: the score counts up (ease-out, about 0.9 s; instant with reduced motion). A new record gets the
+   * gold treatment and a short burst of crystal sparks around the number.
+   */
+  private countUp(el: HTMLElement, to: number, record: boolean) {
+    const sheet = el.closest('.sheet');
+    sheet?.classList.toggle('is-record', record);
+    sheet?.querySelectorAll('.res-spark').forEach((n) => n.remove());
+    if (this.settings.reducedMotion || to <= 0) { el.textContent = fmt(to); return; }
+    const t0 = performance.now(), dur = Math.min(1100, 500 + to / 60);
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(Math.round(to * e));
+      if (p < 1) requestAnimationFrame(step);
+      else if (record) {
+        el.classList.remove('landed'); void el.offsetWidth; el.classList.add('landed');
+        const host = el.parentElement!;
+        for (let i = 0; i < (this.settings.reducedEffects ? 8 : 18); i++) {
+          const sp = document.createElement('i');
+          sp.className = 'res-spark';
+          const a = (i / 18) * Math.PI * 2 + Math.random() * 0.3, d = 50 + Math.random() * 60;
+          sp.style.setProperty('--dx', `${Math.cos(a) * d}px`); sp.style.setProperty('--dy', `${Math.sin(a) * d * 0.6}px`);
+          sp.style.left = `${el.offsetLeft + el.offsetWidth / 2}px`; sp.style.top = `${el.offsetTop + el.offsetHeight / 2}px`;
+          sp.style.animationDelay = `${Math.random() * 80}ms`;
+          host.appendChild(sp);
+          setTimeout(() => sp.remove(), 1000);
+        }
+      }
+    };
+    el.textContent = '0';
+    requestAnimationFrame(step);
+  }
+
   private gameOver() {
     const st = this.session.state;
     const prevBest = this.bestAtStart;
@@ -881,7 +937,7 @@ export class App {
     this.lastResultInfo = { score: st.score, best: legacy ? this.stats.legacyBestScore : this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord, level, title, material: mat, message, overdrives: st.stats.odActivations };
     $('resKicker').textContent = kicker;
     $('resKicker').classList.toggle('record', kicker !== 'GAME OVER');
-    $('resScore').textContent = fmt(st.score);
+    this.countUp($('resScore'), st.score, newRecord);
     const bestNow = legacy ? this.stats.legacyBestScore : this.stats.bestScore;
     $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(bestNow)}${legacy ? ' (Build 3 rules)' : ''}`;
     $('resLines').textContent = fmt(st.stats.linesCleared);
@@ -921,7 +977,7 @@ export class App {
     if (up.newBest && up.previousBest > 0) setTimeout(() => sfx.record(), 500);
     $('drKicker').textContent = up.newBest && up.previousBest > 0 ? 'NEW DAILY BEST' : summary.fullRun ? 'DAILY CHALLENGE COMPLETE' : 'NO MOVES LEFT';
     $('drDate').textContent = `${dayLabel(id)} (UTC)`;
-    $('drScore').textContent = fmt(st.score);
+    this.countUp($('drScore'), st.score, false);
     $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Today's best ${fmt(day.best)}`;
     $('drFirst').textContent = day.first !== null && (run.attempt > 1 || !up.firstCompletion) ? `First attempt ${fmt(day.first)} · attempt ${run.attempt}` : 'First attempt';
     $('drPlaced').textContent = `${st.stats.moves}/${st.daily!.limit}`;
@@ -1312,12 +1368,15 @@ export class App {
     setHighContrast(s.highContrast);
     this.view.reduced = s.reducedMotion;
     this.view.animator.reduced = s.reducedMotion;
+    this.view.lowFx = s.reducedEffects;
+    this.view.animator.lowFx = s.reducedEffects;
     document.documentElement.classList.toggle('reduced', s.reducedMotion);
     document.documentElement.classList.toggle('contrast', s.highContrast);
     $<HTMLInputElement>('setSound').checked = s.sound;
     $<HTMLInputElement>('setHaptics').checked = s.haptics;
     $<HTMLInputElement>('setMotion').checked = s.reducedMotion;
     $<HTMLInputElement>('setContrast').checked = s.highContrast;
+    $<HTMLInputElement>('setEffects').checked = s.reducedEffects;
     $<HTMLInputElement>('setMusic').checked = s.music;
     $<HTMLInputElement>('setSfxVol').value = String(s.sfxVolume);
     $<HTMLInputElement>('setMusicVol').value = String(s.musicVolume);
@@ -1726,15 +1785,20 @@ export class App {
       if (this.screen === 'game') this.view.resize();
       this.wake();
     };
-    apply(saved === 'b4' || saved === 'b5b' || saved === 'b5c' ? saved : 'b5c');
+    apply(saved === 'b4' || saved === 'b5b' || saved === 'b5c' || saved === 'b6' ? saved : 'b6');
     document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.addEventListener('click', () => {
       const st = b.dataset.gfx as BlockStyle;
       store('bloq.graphics', st); apply(st); sfx.select();
-      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid' }[st]);
+      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid', b6: 'Build 6: energy crystal' }[st]);
     }));
   }
 
   private bindUi() {
+    // Build 6: every interface button gives a soft click (game sounds stay separate; respects the sound setting).
+    document.addEventListener('pointerdown', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('button, .btn, .seg button, [role="button"]')) sfx.click();
+    }, { capture: true });
     this.bindGraphics();
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
@@ -1807,6 +1871,7 @@ export class App {
     toggle('setHaptics', 'haptics');
     toggle('setMotion', 'reducedMotion');
     toggle('setContrast', 'highContrast');
+    toggle('setEffects', 'reducedEffects');
     toggle('setMusic', 'music');
     const vol = (id: string, key: 'sfxVolume' | 'musicVolume') => $<HTMLInputElement>(id).addEventListener('input', (e) => {
       this.settings = { ...this.settings, [key]: Number((e.target as HTMLInputElement).value) };

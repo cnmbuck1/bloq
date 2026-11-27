@@ -25,6 +25,12 @@ based materials and rendered once into cached sprites: **5B anodized metal** and
 selector in Settings (development builds only) switches between them and Build 4. It also has the redesigned Daily
 Challenge landing and history screens. See `docs/BUILD5_PROTOTYPE_REPORT.md`.
 
+Build 6, **Premium Design, Graphic Refinement & Game Feel**, takes the 5C crystal direction further into
+edge-lit **energy crystals** (drawn procedurally in 2D, so no WebGL is needed), a recessed board with a metal
+and glass perimeter, a layered reactor background, a shattering line clear with Overdrive charge that flies into
+the meter, refined sounds, tray pedestals, gold and cyan buttons, today's real puzzle on the Daily screen and an
+animated results screen. Rules, scoring and saves are unchanged. See `docs/BUILD6_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -54,7 +60,7 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 5 prototype" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 6" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.
