@@ -16,6 +16,47 @@ export interface ScoringConfig {
   pulseBlockCleared: number;
   /** Combo multiplier by consecutive clearing move, index 0 = first clearing move. The last entry repeats. */
   comboMultipliers: number[];
+  /** Build 4: bonus when a placement's full resolution leaves the board empty (multiplied by the combo). */
+  perfectClear: number;
+}
+
+/** Build 4: Combo Protection. Non-clearing placements an active combo survives (0 = Build 3 immediate reset). */
+export interface ComboConfig {
+  protection: number;
+}
+
+export type OverdriveRotation = 'free' | 'limited' | 'reduced' | 'none';
+
+/** Build 4: Overdrive, the player-activated scoring state. Charge values are percentages of the meter. */
+export interface OverdriveConfig {
+  enabled: boolean;
+  /** Successful placements an activation lasts. */
+  duration: number;
+  /** Applied to the whole move score (after the combo). */
+  multiplier: number;
+  /** free: rotations cost nothing; limited: `limitedFree` free turns per activation; reduced: cost − 1; none. */
+  rotation: OverdriveRotation;
+  limitedFree: number;
+  /** Charge for clearing N lines in one move (index = N); only one line reward per move. */
+  chargeLines: number[];
+  chargeExtraLine: number;
+  chargePerPulse: number;
+  /** Extra charge when one move's chain reaches `chainBonusAt` Pulses. */
+  chargeChainBonus: number;
+  chainBonusAt: number;
+  chargePerfect: number;
+}
+
+/** Build 4: Daily Challenge rules (identical for every player on a day). */
+export interface DailyConfig {
+  placementLimit: number;
+  startEnergy: number;
+  startOverdrive: number;
+  pulseChance: number;
+  /** Fixed piece-size mix for the pre-generated sequence (never board-aware). */
+  band: { small: number; medium: number; large: number };
+  /** Blocks on the generated starting board (min..max). */
+  startBlocks: [number, number];
 }
 
 /** Build 3: piece mix by level. Shares are relative (they needn't add to 1). */
@@ -100,18 +141,37 @@ export interface GameConfig {
   progression: ProgressionConfig;
   difficulty: DifficultyConfig;
   materials: MaterialDef[];
+  /** Build 4: scoring ruleset version. Records from different rulesets are never compared. */
+  ruleset: number;
+  combo: ComboConfig;
+  overdrive: OverdriveConfig;
+  daily: DailyConfig;
 }
+
+/** Ruleset 1 (Builds 1–3): kept so games saved before Build 4 finish under the rules they started with. */
+export const LEGACY_RULESET_1: { scoring: ScoringConfig; thresholds: number[]; extraGapStep: number } = {
+  scoring: {
+    perBlockPlaced: 1, linePoints: [0, 100, 250, 450, 700], extraLinePoints: 250, pulseActivation: 50,
+    pulseBlockCleared: 10, comboMultipliers: [1.0, 1.5, 2.0, 2.5, 3.0], perfectClear: 0,
+  },
+  thresholds: [0, 1000, 2500, 4500, 7000, 10000, 13500, 17500, 22000, 27000, 32500, 38500, 45000, 52000, 59500],
+  extraGapStep: 500,
+};
+
+export const CURRENT_RULESET = 2;
 
 export const DEFAULT_CONFIG: GameConfig = {
   boardSize: 8,
   traySize: 3,
+  // Build 4 ruleset 2 scoring (Build 1–3 values are in LEGACY_RULESET_1).
   scoring: {
-    perBlockPlaced: 1,
-    linePoints: [0, 100, 250, 450, 700],
-    extraLinePoints: 250,
-    pulseActivation: 50,
-    pulseBlockCleared: 10,
+    perBlockPlaced: 10,
+    linePoints: [0, 150, 400, 750, 1200],
+    extraLinePoints: 400,
+    pulseActivation: 100,
+    pulseBlockCleared: 25,
     comboMultipliers: [1.0, 1.5, 2.0, 2.5, 3.0],
+    perfectClear: 2000,
   },
   generation: {
     pulseChance: 0.12,
@@ -128,12 +188,12 @@ export const DEFAULT_CONFIG: GameConfig = {
     animMs: 180,
   },
   progression: {
-    thresholds: [0, 1000, 2500, 4500, 7000, 10000, 13500, 17500, 22000, 27000, 32500, 38500, 45000, 52000, 59500],
+    thresholds: [0, 1500, 4000, 7500, 12000, 17500, 24000, 31500, 40000, 49500, 60000, 71500, 84000, 97500, 112000],
     titles: [
       'Initiate', 'Operator', 'Technician', 'Specialist', 'Strategist', 'Architect', 'Engineer', 'Mastermind', 'Elite',
       'Quantum Master', 'Quantum Master II', 'Quantum Master III', 'Quantum Master IV', 'Quantum Master V', 'Quantum Master VI',
     ],
-    extraGapStep: 500,
+    extraGapStep: 1000,
     beyondTitle: 'Quantum Master',
     beyondTitleOffset: 9,
     levelUpEnergy: 'full',
@@ -158,4 +218,14 @@ export const DEFAULT_CONFIG: GameConfig = {
     { id: 'crimson', name: 'Crimson', color: '#E34268', highlight: '#FFA6BA', shadow: '#681127', minLevel: 9 },
     { id: 'platinum', name: 'Quantum Platinum', color: '#C3D5E5', highlight: '#FFFFFF', shadow: '#4F6273', minLevel: 11 },
   ],
+  ruleset: CURRENT_RULESET,
+  combo: { protection: 1 },
+  overdrive: {
+    enabled: true, duration: 5, multiplier: 2, rotation: 'free', limitedFree: 3,
+    chargeLines: [0, 10, 25, 40, 60], chargeExtraLine: 15, chargePerPulse: 10, chargeChainBonus: 10, chainBonusAt: 3, chargePerfect: 30,
+  },
+  daily: {
+    placementLimit: 30, startEnergy: 3, startOverdrive: 0, pulseChance: 0.12,
+    band: { small: 30, medium: 50, large: 20 }, startBlocks: [6, 10],
+  },
 };
