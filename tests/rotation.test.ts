@@ -130,7 +130,8 @@ describe('Rotation Energy', () => {
   });
 
   it('restores one charge per completed line', () => {
-    const s = stateWith(['XXXXXXX.', ...EMPTY.slice(1)], [p('single'), p('single'), null], 1);
+    // A block stays elsewhere so this isn't a Perfect Clear (whose bonus would also level up and refill energy).
+    const s = stateWith(['XXXXXXX.', ...EMPTY.slice(1, 7), 'X.......'], [p('single'), p('single'), null], 1);
     const out = applyMove(s, 0, 0, 7);
     if (!out.ok) throw new Error(out.reason);
     expect(out.result.energyGained).toBe(1);
@@ -267,7 +268,7 @@ describe('session lock and persistence', () => {
     const { energy: _e, ...v1state } = s;
     const v1 = JSON.stringify({ version: 1, savedAt: 1, elapsedMs: 5000, bestAtStart: 1234, state: { ...v1state, tray: s.tray.map((t) => t && { defId: t.defId, color: 3, pulseIndex: t.pulseIndex }) } });
     const m = deserializeGame(v1);
-    expect(m?.version).toBe(3);
+    expect(m?.version).toBe(4);
     expect(m?.state.energy).toBe(3);
     expect(m?.state.tray.every((t) => !t || t.rot === 0)).toBe(true);
     expect(m?.bestAtStart).toBe(1234);

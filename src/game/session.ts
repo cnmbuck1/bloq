@@ -2,12 +2,13 @@
 // rotating while a clearing sequence is still playing. No rendering in here.
 
 import { DEFAULT_CONFIG, type GameConfig } from '../engine/config';
-import { applyMove, rotatePiece, type GameState, type MoveResult, type RotateOutcome } from '../engine/game';
+import { activateOverdrive, applyMove, rotatePiece, type GameState, type MoveResult, type RotateOutcome } from '../engine/game';
 
 export interface PlacementTarget { slot: number; row: number; col: number; /** Tutorial: required orientation. */ rot?: number }
 
 export type PlaceRejection = 'locked' | 'over' | 'empty-slot' | 'blocked' | 'not-target';
 export type RotateRejection = 'locked' | 'over' | 'empty-slot' | 'disabled' | 'no-energy';
+export type OverdriveRejection = 'locked' | 'over' | 'disabled' | 'active' | 'not-charged';
 
 export class GameSession {
   state: GameState;
@@ -17,7 +18,7 @@ export class GameSession {
   requiredTarget: PlacementTarget | null = null;
   /** Tutorial only: whether the step lets the player rotate. */
   rotationAllowed = true;
-  lastRejection: PlaceRejection | RotateRejection | null = null;
+  lastRejection: PlaceRejection | RotateRejection | OverdriveRejection | null = null;
 
   constructor(state: GameState, readonly cfg: GameConfig = DEFAULT_CONFIG) {
     this.state = state;
@@ -47,8 +48,18 @@ export class GameSession {
     return out;
   }
 
+  /** Build 4: activates a fully charged Overdrive. Not a placement; refused while a sequence resolves. */
+  tryActivateOverdrive(): GameState | null {
+    if (this.locked) return this.reject('locked');
+    const out = activateOverdrive(this.state, this.cfg);
+    if (!out.ok) return this.reject(out.reason);
+    this.state = out.state;
+    this.lastRejection = null;
+    return out.state;
+  }
+
   /** Called by the animation controller when the sequence for the last move has fully played. */
   finishResolution() { this.locked = false; }
 
-  private reject(r: PlaceRejection | RotateRejection): null { this.lastRejection = r; return null; }
+  private reject(r: PlaceRejection | RotateRejection | OverdriveRejection): null { this.lastRejection = r; return null; }
 }

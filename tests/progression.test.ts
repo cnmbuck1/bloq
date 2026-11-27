@@ -30,29 +30,29 @@ const move = (s: GameState, slot: number, row: number, col: number, cfg = DEFAUL
 
 describe('level thresholds', () => {
   it('matches the spec table and titles', () => {
-    const want = [0, 1000, 2500, 4500, 7000, 10000, 13500, 17500, 22000, 27000, 32500, 38500, 45000, 52000, 59500];
+    const want = [0, 1500, 4000, 7500, 12000, 17500, 24000, 31500, 40000, 49500, 60000, 71500, 84000, 97500, 112000];
     want.forEach((t, i) => expect(levelThreshold(P, i + 1)).toBe(t));
     expect(levelTitle(P, 1)).toBe('Initiate');
     expect(levelTitle(P, 10)).toBe('Quantum Master');
     expect(levelTitle(P, 15)).toBe('Quantum Master VI');
   });
 
-  it('is endless: each gap past Level 15 grows by 500', () => {
-    expect(levelThreshold(P, 16)).toBe(67500);
-    expect(levelThreshold(P, 17)).toBe(76000);
-    expect(levelThreshold(P, 18)).toBe(85000);
+  it('is endless: each gap past Level 15 grows by 1,000 (Build 4)', () => {
+    expect(levelThreshold(P, 16)).toBe(127500);
+    expect(levelThreshold(P, 17)).toBe(144000);
+    expect(levelThreshold(P, 18)).toBe(161500);
     expect(levelTitle(P, 16)).toBe('Quantum Master VII');
     expect(levelTitle(P, 40)).toMatch(/^Quantum Master [IVXLC]+$/);
     for (let L = 1; L < 60; L++) expect(levelThreshold(P, L + 1)).toBeGreaterThan(levelThreshold(P, L));
   });
 
   it('levels and progress are relative to the current level', () => {
-    expect(levelForScore(P, 999)).toBe(1);
-    expect(levelForScore(P, 1000)).toBe(2);
+    expect(levelForScore(P, 1499)).toBe(1);
+    expect(levelForScore(P, 1500)).toBe(2);
     const p = levelProgress(P, 1850);
-    expect(p).toMatchObject({ level: 2, title: 'Operator', start: 1000, next: 2500, remaining: 650 });
-    expect(p.fraction).toBeCloseTo(850 / 1500);
-    expect(levelProgress(P, 1000).fraction).toBe(0);
+    expect(p).toMatchObject({ level: 2, title: 'Operator', start: 1500, next: 4000, remaining: 2150 });
+    expect(p.fraction).toBeCloseTo(350 / 2500);
+    expect(levelProgress(P, 1500).fraction).toBe(0);
   });
 });
 
@@ -65,7 +65,7 @@ describe('advancement during play', () => {
     expect(o.result.levelAfter).toBe(2);
     expect(o.state.level).toBe(2);
     expect(o.state.score).toBe(o.result.scoreAfter); // no points for levelling
-    expect(o.result.points.total).toBe(o.result.scoreAfter - 950);
+    expect(o.result.points.total).toBe(o.result.scoreAfter - 1350);
     expect(o.state.tray[1]).toEqual(s.tray[1]);
     expect(o.state.tray[2]).toEqual(s.tray[2]);
     expect(o.state.combo).toBe(1);
@@ -166,8 +166,8 @@ describe('difficulty by level', () => {
   });
 
   it('is deterministic for a seed and level', () => {
-    const a = newGame(31337, DEFAULT_CONFIG, { score: 30000 });
-    const b = newGame(31337, DEFAULT_CONFIG, { score: 30000 });
+    const a = newGame(31337, DEFAULT_CONFIG, { score: 50000 });
+    const b = newGame(31337, DEFAULT_CONFIG, { score: 50000 });
     expect(a.tray).toEqual(b.tray);
     expect(a.level).toBe(10);
   });
@@ -216,9 +216,9 @@ describe('materials', () => {
 });
 
 describe('career and achievements', () => {
-  it('there are 19 achievements with unique ids', () => {
-    expect(ACHIEVEMENTS).toHaveLength(19);
-    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(19);
+  it('there are 32 achievements (19 from Build 3, 13 from Build 4) with unique ids', () => {
+    expect(ACHIEVEMENTS).toHaveLength(32);
+    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(32);
   });
 
   it('lifetime points are never credited twice for the same move (restore, reopen, crash)', () => {
@@ -264,7 +264,8 @@ describe('persistence', () => {
     const { level: _drop, ...v2state } = { ...g, score: 4600 };
     const raw = JSON.stringify({ version: 2, savedAt: 0, elapsedMs: 0, bestAtStart: 0, state: v2state });
     const back = deserializeGame(raw);
-    expect(back!.version).toBe(3);
+    expect(back!.version).toBe(4);
+    expect(back!.state.ruleset).toBe(1);
     expect(back!.state.level).toBe(4);
     expect(back!.state.energy).toBe(g.energy);
   });

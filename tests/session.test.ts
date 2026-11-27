@@ -49,7 +49,7 @@ describe('save and restore', () => {
     expect(restored!.state).toEqual(a);
     expect(restored!.elapsedMs).toBe(12345);
     expect(restored!.bestAtStart).toBe(900);
-    expect(restored!.version).toBe(3);
+    expect(restored!.version).toBe(4);
   });
 
   it('rejects corrupt, unknown-version and finished saves', () => {
@@ -67,7 +67,7 @@ describe('save and restore', () => {
 describe('lifetime statistics', () => {
   it('records moves and game ends', () => {
     let st = emptyStats();
-    let g = newGame(1, undefined, { board: boardFromArt(ART) });
+    let g = newGame(1, undefined, { board: boardFromArt([...ART.slice(0, 7), 'X.......']) });
     g = { ...g, tray: [{ defId: 'i2v', color: 0, pulseIndex: -1 }, null, null] };
     const o = applyMove(g, 0, 0, 7);
     if (!o.ok) throw new Error('expected ok');

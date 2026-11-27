@@ -11,7 +11,11 @@ export type AnalyticsEvent =
   | 'rotation_performed' | 'rotation_denied' | 'rotation_then_placed' | 'rotation_then_clear' | 'save_reset'
   // Build 3
   | 'level_reached' | 'energy_restored_level_up' | 'material_tier_reached' | 'material_unlocked' | 'material_selected'
-  | 'achievement_unlocked';
+  | 'achievement_unlocked'
+  // Build 4
+  | 'first_placement' | 'first_line' | 'first_pulse' | 'combo_protected' | 'overdrive_energy_earned' | 'overdrive_ready'
+  | 'overdrive_activated' | 'overdrive_completed' | 'perfect_clear' | 'game_completed' | 'immediate_replay'
+  | 'daily_started' | 'daily_completed' | 'daily_replayed' | 'leaderboard_viewed' | 'session_started';
 
 export interface LoggedEvent { t: number; s: string; e: AnalyticsEvent; d?: Record<string, number | string | boolean> }
 

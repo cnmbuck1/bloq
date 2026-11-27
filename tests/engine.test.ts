@@ -174,7 +174,7 @@ describe('pulse blocks', () => {
 
 describe('scoring', () => {
   it('uses the line table and extra-line value', () => {
-    expect([1, 2, 3, 4, 5, 6].map((n) => linePointsFor(S, n))).toEqual([100, 250, 450, 700, 950, 1200]);
+    expect([1, 2, 3, 4, 5, 6].map((n) => linePointsFor(S, n))).toEqual([150, 400, 750, 1200, 1600, 2000]);
     expect(linePointsFor(S, 0)).toBe(0);
   });
 
@@ -184,7 +184,7 @@ describe('scoring', () => {
 
   it('applies the multiplier to line and pulse points but not placement', () => {
     const b = scoreMove(S, { blocksPlaced: 3, lineCount: 1, pulsesActivated: 1, pulseCleared: 3, combo: 2 });
-    expect(b.total).toBe(3 + Math.round((100 + 50 + 30) * 1.5));
+    expect(b.total).toBe(30 + Math.round((150 + 100 + 75) * 1.5));
   });
 
   it('rounds to whole numbers', () => {
@@ -196,18 +196,19 @@ describe('scoring', () => {
     const s = stateWith(['........', '........', '........', '.XXXXX..', 'XX..XXXX', '.XXXXX..', '........', '........'], [piece('i2h', 1), piece('single'), null]);
     const out = applyMove(s, 0, 4, 2);
     if (!out.ok) throw new Error('expected ok');
-    // 2 placed + 1 line (100) + 1 pulse (50) + 6 neighbours (60)
-    expect(out.result.points.total).toBe(2 + 100 + 50 + 60);
-    expect(out.state.score).toBe(212);
+    // Ruleset 2: 2 placed (20) + 1 line (150) + 1 Pulse (100) + 6 neighbours (150)
+    expect(out.result.points.total).toBe(20 + 150 + 100 + 150);
+    expect(out.state.score).toBe(420);
   });
 });
 
 describe('combos', () => {
   const rowArt = ['XXXXXXX.', 'XXXXXXX.', 'XXXXXXX.', 'XXXXXXX.', ...EMPTY.slice(4)];
-  it('increases on consecutive clearing moves and resets on a non-clearing move', () => {
+  it('increases on consecutive clearing moves; with protection off, resets on a non-clearing move', () => {
+    const c0: GameConfig = { ...cfg, combo: { protection: 0 } };
     let s = stateWith(rowArt, [piece('single'), piece('single'), piece('single')]);
     const step = (slot: number, r: number, c: number) => {
-      const out = applyMove(s, slot, r, c);
+      const out = applyMove(s, slot, r, c, c0);
       if (!out.ok) throw new Error(`move failed: ${out.reason}`);
       s = out.state; return out.result;
     };
@@ -215,7 +216,7 @@ describe('combos', () => {
     const second = step(1, 1, 7);
     expect(second.combo).toBe(2);
     expect(second.points.multiplier).toBe(1.5);
-    expect(second.points.total).toBe(1 + 150);
+    expect(second.points.total).toBe(10 + 225);
     expect(step(2, 7, 0).combo).toBe(0); // no clear: reset
     expect(s.stats.maxCombo).toBe(2);
   });
@@ -391,9 +392,9 @@ describe('dev scenarios', () => {
 describe('config', () => {
   it('scoring values can be changed without touching the engine', () => {
     const custom: GameConfig = { ...cfg, scoring: { ...cfg.scoring, linePoints: [0, 1000] } };
-    const s = stateWith(['XXXXX...', ...EMPTY.slice(1)], [piece('i3h'), piece('single'), null]);
+    const s = stateWith(['XXXXX...', ...EMPTY.slice(1, 7), 'X.......'], [piece('i3h'), piece('single'), null]);
     const out = applyMove(s, 0, 0, 5, custom);
     if (!out.ok) throw new Error('expected ok');
-    expect(out.result.points.total).toBe(3 + 1000);
+    expect(out.result.points.total).toBe(30 + 1000);
   });
 });

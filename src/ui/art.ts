@@ -85,42 +85,71 @@ export function paintLogoCanvas(canvas: HTMLCanvasElement, t = 0) {
   drawLogo(g, w / 2, h / 2, Math.min(h * 0.78, w * 0.2), t);
 }
 
-// A small machined arrangement: blocks in the current material around a Pulse, with a slow scan of light and,
-// every few seconds, a restrained Pulse discharge.
+// Build 4 home art: a cinematic arrangement of dimensional blocks in the current material around a cyan Pulse core,
+// slowly floating, with drifting cyan and gold particles, a scan of light and, every few seconds, a restrained Pulse
+// discharge. Reduced motion draws one still frame.
 const ART = [
-  '..XXX...',
-  '.XXPX.X.',
-  '...XXXX.',
-  '..X.X...',
+  '..XX.X..',
+  '.XXPXX..',
+  '..XXXXX.',
+  '...X.X..',
 ];
+const MOTES = Array.from({ length: 26 }, (_, i) => {
+  const h = (n: number) => { const x = Math.sin((i + 1) * 91.7 + n * 37.3) * 43758.5; return x - Math.floor(x); };
+  return { x: h(1), y: h(2), r: 0.6 + h(3) * 1.6, sp: 0.15 + h(4) * 0.5, gold: h(5) > 0.72, ph: h(6) * 6.28 };
+});
 
 export function paintHomeArt(canvas: HTMLCanvasElement, t: number, reduced: boolean) {
   const { g, w, h } = fit(canvas);
   g.clearRect(0, 0, w, h);
   const cols = 8, rows = ART.length;
-  const pitch = Math.min(w / (cols + 0.6), h / (rows + 0.6));
+  const pitch = Math.min(w / (cols + 1.2), h / (rows + 1.1));
   const cell = pitch * 0.9;
   const ox = (w - cols * pitch) / 2, oy = (h - rows * pitch) / 2;
+  const T = reduced ? 0 : t;
+  // Soft light pool behind the cluster.
+  const pr = ART.findIndex((l) => l.includes('P')), pc = ART[pr].indexOf('P');
+  const pcx = ox + pc * pitch + pitch / 2, pcy = oy + pr * pitch + pitch / 2;
+  const pool = g.createRadialGradient(pcx, pcy, 0, pcx, pcy, pitch * 4.5);
+  pool.addColorStop(0, rgba(THEME.pulse, 0.16)); pool.addColorStop(0.5, rgba('#D936AD', 0.06)); pool.addColorStop(1, rgba(THEME.pulse, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  // Drifting particles (behind).
+  for (const m of MOTES) {
+    const y = ((m.y - (T * 0.00002 * m.sp * 10)) % 1 + 1) % 1;
+    const x = m.x + Math.sin(T * 0.0004 * m.sp + m.ph) * 0.02;
+    const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(T * 0.002 * m.sp + m.ph));
+    g.fillStyle = rgba(m.gold ? THEME.gold : THEME.pulse, a * (m.gold ? 0.9 : 0.6));
+    g.beginPath(); g.arc(x * w, y * h, m.r, 0, Math.PI * 2); g.fill();
+  }
   const scan = reduced ? -10 : ((t % 5200) / 5200) * (cols + rows + 6) - 3;
   ART.forEach((line, r) => [...line].forEach((ch, c) => {
-    const x = ox + c * pitch + (pitch - cell) / 2, y = oy + r * pitch + (pitch - cell) / 2;
-    g.fillStyle = rgba(THEME.empty, 0.55);
-    roundRect(g, x, y, cell, cell, cell * 0.14); g.fill();
     if (ch === '.') return;
+    // Each block floats on its own slow phase; nearer the core floats less.
+    const bob = reduced ? 0 : Math.sin(T * 0.0016 + r * 1.3 + c * 0.7) * pitch * 0.05;
+    const x = ox + c * pitch + (pitch - cell) / 2, y = oy + r * pitch + (pitch - cell) / 2 + bob;
     const near = Math.max(0, 1 - Math.abs(c + r - scan) / 1.6);
-    drawBlock(g, x, y, cell, ch === 'P', t, reduced, { bright: near * 0.35 });
+    drawBlock(g, x, y, cell, ch === 'P', t, reduced, { bright: near * 0.32 });
   }));
+  // Gold accent glints on a couple of block edges.
+  if (!reduced) {
+    for (const [r, c, ph] of [[0, 2, 0], [2, 6, 2.1], [1, 1, 4.2]] as const) {
+      const k = Math.max(0, Math.sin(t * 0.0012 + ph));
+      if (k < 0.6) continue;
+      const gx = ox + c * pitch + pitch * 0.25, gy = oy + r * pitch + pitch * 0.12;
+      const sp = g.createRadialGradient(gx, gy, 0, gx, gy, pitch * 0.4);
+      sp.addColorStop(0, rgba('#FFF3D1', (k - 0.6) * 2)); sp.addColorStop(1, rgba(THEME.gold, 0));
+      g.fillStyle = sp; g.fillRect(gx - pitch * 0.4, gy - pitch * 0.4, pitch * 0.8, pitch * 0.8);
+    }
+  }
   if (reduced) return;
   // Pulse discharge: a cyan ring spreading over the 3x3 around the Pulse, once every 6.5 s.
   const phase = (t % 6500) / 6500;
   if (phase < 0.12) {
     const p = phase / 0.12;
-    const pr = ART.findIndex((l) => l.includes('P')), pc = ART[pr].indexOf('P');
-    const cx = ox + pc * pitch + pitch / 2, cy = oy + pr * pitch + pitch / 2;
     g.save();
     g.strokeStyle = rgba(THEME.pulse, 0.7 * (1 - p)); g.lineWidth = 2 + 3 * (1 - p);
     g.shadowColor = THEME.pulse; g.shadowBlur = 14;
-    roundRect(g, cx - pitch * 1.5 * p, cy - pitch * 1.5 * p, pitch * 3 * p, pitch * 3 * p, pitch * 0.3 * p); g.stroke();
+    roundRect(g, pcx - pitch * 1.5 * p, pcy - pitch * 1.5 * p, pitch * 3 * p, pitch * 3 * p, pitch * 0.3 * p); g.stroke();
     g.restore();
   }
 }
@@ -163,8 +192,13 @@ export function paintSplash(canvas: HTMLCanvasElement) {
 export interface ShareInfo {
   score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean;
   /** Build 3 */
-  level: number; title: string; material: MaterialLook; message: string;
+  level: number; title: string; material: MaterialLook & { name?: string }; message: string;
+  /** Build 4 */
+  overdrives?: number;
 }
+
+/** Build 4 Daily share card. `rank` is set only when Game Center actually returned one. */
+export interface DailyShareInfo { day: string; score: number; rank: number | null; streak: number; message: string; material: MaterialLook }
 
 function background(g: CanvasRenderingContext2D, W: number, H: number) {
   const bg = g.createLinearGradient(0, 0, 0, H);
@@ -215,24 +249,84 @@ export function renderShareCard(info: ShareInfo): HTMLCanvasElement {
   bar.addColorStop(0, info.material.highlight); bar.addColorStop(0.55, info.material.color); bar.addColorStop(1, info.material.shadow);
   g.fillStyle = bar; roundRect(g, W / 2 - 220, 735, 440, 14, 7); g.fill();
 
-  const stat = (label: string, value: string, x: number) => {
+  const stat = (label: string, value: string, x: number, color: string) => {
     g.fillStyle = 'rgba(28,42,56,0.9)';
-    roundRect(g, x - 190, 800, 380, 190, 30); g.fill();
+    roundRect(g, x - 128, 800, 256, 190, 28); g.fill();
     g.strokeStyle = rgba(THEME.gridBorder, 0.9); g.lineWidth = 2;
-    roundRect(g, x - 190, 800, 380, 190, 30); g.stroke();
-    g.fillStyle = THEME.textDim; g.font = `700 30px ${FONT}`;
+    roundRect(g, x - 128, 800, 256, 190, 28); g.stroke();
+    g.fillStyle = THEME.textDim; g.font = `700 27px ${FONT}`;
     g.fillText(label, x, 852);
-    g.fillStyle = label.includes('CHAIN') ? THEME.pulse : info.material.highlight; g.font = `800 78px ${FONT}`;
+    g.fillStyle = color; g.font = `800 76px ${FONT}`;
     g.fillText(value, x, 930);
   };
-  stat('BIGGEST CHAIN', info.chain ? `×${info.chain}` : '–', W / 2 - 205);
-  stat('HIGHEST COMBO', info.combo ? `×${info.combo}` : '–', W / 2 + 205);
+  stat('CHAIN', info.chain ? `×${info.chain}` : '–', W / 2 - 272, THEME.pulse);
+  stat('OVERDRIVE', `${info.overdrives ?? 0}`, W / 2, THEME.gold);
+  // Material tile: the finish this game ended in, named in its own colour.
+  g.fillStyle = 'rgba(28,42,56,0.9)';
+  roundRect(g, W / 2 + 272 - 128, 800, 256, 190, 28); g.fill();
+  g.strokeStyle = rgba(THEME.gridBorder, 0.9); g.lineWidth = 2;
+  roundRect(g, W / 2 + 272 - 128, 800, 256, 190, 28); g.stroke();
+  g.fillStyle = THEME.textDim; g.font = `700 27px ${FONT}`;
+  g.fillText('MATERIAL', W / 2 + 272, 852);
+  const words = (info.material.name ?? info.material.id).toUpperCase().split(' ');
+  let fs = 40;
+  g.font = `800 ${fs}px ${FONT}`;
+  while (fs > 22 && Math.max(...words.map((w) => g.measureText(w).width)) > 220) { fs -= 2; g.font = `800 ${fs}px ${FONT}`; }
+  g.fillStyle = info.material.highlight;
+  words.forEach((w, i) => g.fillText(w, W / 2 + 272, 915 + (i - (words.length - 1) / 2) * (fs + 4)));
 
   g.fillStyle = THEME.text;
   g.font = `800 60px ${FONT}`;
   g.font = `800 ${info.message.length > 30 ? 50 : 58}px ${FONT}`;
   g.fillText(info.message, W / 2, 1120);
 
+  drawOrbIcon(g, 64, W / 2 - 186, 1192);
+  g.fillStyle = THEME.textDim; g.textAlign = 'left';
+  g.font = `700 32px ${FONT}`;
+  g.fillText('CNMBUCK STUDIOS', W / 2 - 112, 1225);
+  return c;
+}
+
+/** 1080×1350 Daily Challenge card: date, score, streak and a rank only when one was verified by Game Center. */
+export function renderDailyShareCard(info: DailyShareInfo): HTMLCanvasElement {
+  const W = 1080, H = 1350;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d')!;
+  setRenderScale(1);
+  background(g, W, H);
+  const gold = g.createRadialGradient(W / 2, 700, 0, W / 2, 700, 600);
+  gold.addColorStop(0, rgba(THEME.gold, 0.16)); gold.addColorStop(1, rgba(THEME.gold, 0));
+  g.fillStyle = gold; g.fillRect(0, 250, W, 950);
+  const frag = (x0: number, y0: number, art: string[]) => art.forEach((line, r) => [...line].forEach((ch, col) => {
+    if (ch !== '.') drawBlock(g, x0 + col * 92, y0 + r * 92, 82, ch === 'P', 0, true, { alpha: 0.9, material: info.material });
+  }));
+  frag(48, 48, ['XX', 'P.']);
+  frag(W - 48 - 174, 48, ['.X', 'XX']);
+  drawLogo(g, W / 2, 250, 160);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = THEME.gold; g.font = `800 44px ${FONT}`;
+  g.fillText('DAILY CHALLENGE', W / 2, 400);
+  const [y, m, d] = info.day.split('-').map(Number);
+  const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  g.fillStyle = THEME.textDim; g.font = `700 36px ${FONT}`;
+  g.fillText(`${d} ${months[m - 1]} ${y}`, W / 2, 456);
+  paintFrame(g, 110, 510, W - 220, 470, 40, 14, true);
+  g.fillStyle = THEME.textDim; g.font = `700 34px ${FONT}`;
+  g.fillText('SCORE', W / 2, 590);
+  g.fillStyle = THEME.text; g.font = `900 160px ${FONT}`;
+  g.fillText(info.score.toLocaleString('en-US'), W / 2, 700);
+  const chips: [string, string][] = [[`${info.streak}`, info.streak === 1 ? 'DAY STREAK' : 'DAY STREAK']];
+  if (info.rank) chips.unshift([`#${info.rank.toLocaleString('en-US')}`, 'GAME CENTER RANK']);
+  chips.forEach(([v, l], i) => {
+    const x = chips.length === 1 ? W / 2 : W / 2 + (i === 0 ? -200 : 200);
+    g.fillStyle = THEME.gold; g.font = `900 64px ${FONT}`;
+    g.fillText(v, x, 840);
+    g.fillStyle = THEME.textDim; g.font = `700 26px ${FONT}`;
+    g.fillText(l, x, 900);
+  });
+  g.fillStyle = THEME.text; g.font = `800 ${info.message.length > 30 ? 50 : 56}px ${FONT}`;
+  g.fillText(info.message, W / 2, 1100);
   drawOrbIcon(g, 64, W / 2 - 186, 1192);
   g.fillStyle = THEME.textDim; g.textAlign = 'left';
   g.font = `700 32px ${FONT}`;

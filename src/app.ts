@@ -2,10 +2,11 @@
 // haptics, persistence and analytics.
 
 import { drawOrbIcon } from './brand/cnmbuck-orb';
-import { DEFAULT_CONFIG, type GameConfig, type LevelUpEnergy, type MaterialDef, type RotationMode } from './engine/config';
-import { levelProgress, levelThreshold, levelTitle } from './engine/progression';
-import { newGame, stateIsOver, type GameState, type MoveResult } from './engine/game';
-import { inspectSave, serializeGame } from './engine/save';
+import { DEFAULT_CONFIG, type GameConfig, type LevelUpEnergy, type MaterialDef, type OverdriveRotation, type RotationMode } from './engine/config';
+import { levelForScore, levelProgress, levelThreshold, levelTitle } from './engine/progression';
+import { effectiveRotation, newGame, overState, rulesFor, stateIsOver, type GameState, type MoveResult } from './engine/game';
+import { inspectSave, serializeGame, type SaveData } from './engine/save';
+import { addDays, challengeId, dailyChallenge, dailyGame, generateChallenge, msUntilNextChallenge, validateChallenge } from './engine/daily';
 import { rotationCost } from './engine/rotation';
 import { SCENARIOS } from './dev/scenarios';
 import { boardFromArt } from './game/boardArt';
@@ -15,18 +16,24 @@ import {
 } from './game/achievements';
 import { loadSettings, saveSettings, type Settings } from './game/settings';
 import {
-  addPlayTime, averageRotations, averageScore, averageSessionMs, parseStats, recordGameEnd, recordMove, recordRotation,
-  recordSessionGames, type LifetimeStats,
+  addPlayTime, averageRotations, averageScore, averageSessionMs, parseStats, recordGameEnd, recordMove, recordOverdriveActivation, recordRotation,
+  recordSessionGames, syncDaily, type LifetimeStats, type RecordContext,
 } from './game/stats';
+import {
+  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, type DailyRecords,
+} from './game/dailyRecords';
+import {
+  LEADERBOARDS, flushQueue, gameCenterSupported, loadBoard, openDashboard, pruneExpired, queueSubmission, type LeaderboardKey, type PendingSubmission,
+} from './platform/gameCenter';
 import { TUTORIAL_STEPS, tutorialState } from './game/tutorial';
 import { exportAnalytics, flushAnalytics, track } from './platform/analytics';
 import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } from './platform/haptics';
-import { setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
+import { music, setMusicEnabled, setMusicVolume, setSfxVolume, setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
 import { DEFAULT_VISUALS, currentMaterial, setHighContrast, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
-import { paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderShareCard, type ShareInfo } from './ui/art';
+import { paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
 import { InputController } from './ui/input';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -43,9 +50,13 @@ interface DevConfig {
   pulseChance: number; clearMs: number; particles: 'low' | 'medium' | 'high'; haptic: HapticIntensity;
   // Build 3
   levelUpEnergy: LevelUpEnergy; levelMs: number; materialMs: number; visuals: VisualParams;
-  /** Advanced overrides (progression, difficulty, materials, scoring), edited as JSON. */
-  advanced: Partial<Pick<GameConfig, 'progression' | 'difficulty' | 'materials' | 'scoring'>>;
+  /** Advanced overrides (progression, difficulty, materials, scoring, overdrive, daily), edited as JSON. */
+  advanced: Partial<Pick<GameConfig, 'progression' | 'difficulty' | 'materials' | 'scoring' | 'overdrive' | 'daily'>>;
+  // Build 4
+  protection: number; odDuration: number; odMultiplier: number; odRotation: OverdriveRotation; ruleset: number;
+  dailyLimit: number; /** Simulated challenge day (YYYY-MM-DD), '' = today. */ dailyDate: string;
 }
+const ADVANCED_KEYS = ['progression', 'difficulty', 'materials', 'scoring', 'overdrive', 'daily'] as const;
 const DEV_KEY = 'bloq.dev';
 
 const svg = (d: string) => `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">${d}</svg>`;
@@ -60,16 +71,27 @@ const ACH_ICONS: Record<AchievementIcon, string> = {
   games: svg('<rect x="4" y="4" width="7" height="7" rx="1.5" fill="currentColor"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="currentColor" opacity=".6"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="currentColor" opacity=".6"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="currentColor"/>'),
   points: svg('<path d="m12 3 2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="currentColor"/>'),
   material: svg('<path d="M12 3 21 8v8l-9 5-9-5V8z" fill="none" stroke="currentColor" stroke-width="2"/><path d="m3 8 9 5 9-5M12 13v8" stroke="currentColor" stroke-width="1.6" fill="none"/>'),
+  overdrive: svg('<path d="M12 2.5 14.6 9H21l-5.2 4 2 6.5L12 15.6 6.2 19.5l2-6.5L3 9h6.4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><text x="12" y="14.2" font-size="6.5" font-weight="900" text-anchor="middle" fill="currentColor">2×</text>'),
+  perfect: svg('<rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="2"/><path d="m8 12.5 2.8 2.8L16.5 9" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'),
+  shield: svg('<path d="M12 2.8 19.5 5.6v5.6c0 4.6-3.1 8.4-7.5 10-4.4-1.6-7.5-5.4-7.5-10V5.6z" fill="currentColor"/>'),
+  daily: svg('<rect x="4" y="5.5" width="16" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="7.5" y="13" width="3.5" height="3.5" rx=".8" fill="currentColor"/>'),
+  streak: svg('<path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2.2 1-3.6 2-4.6.3 1.6 1 2.6 2 3 0-3 0-5.5 1-8.4z" fill="currentColor"/>'),
 };
 const defaultDev = (): DevConfig => ({
   rotationMode: DEFAULT_CONFIG.rotation.mode, startCharges: DEFAULT_CONFIG.rotation.startCharges, maxCharges: DEFAULT_CONFIG.rotation.maxCharges,
   cost: DEFAULT_CONFIG.rotation.cost, energyPerLine: DEFAULT_CONFIG.rotation.energyPerLine, pulseChance: DEFAULT_CONFIG.generation.pulseChance,
   clearMs: 340, particles: 'medium', haptic: 'medium',
   levelUpEnergy: DEFAULT_CONFIG.progression.levelUpEnergy, levelMs: 950, materialMs: 560, visuals: { ...DEFAULT_VISUALS }, advanced: {},
+  protection: DEFAULT_CONFIG.combo.protection, odDuration: DEFAULT_CONFIG.overdrive.duration, odMultiplier: DEFAULT_CONFIG.overdrive.multiplier,
+  odRotation: DEFAULT_CONFIG.overdrive.rotation, ruleset: DEFAULT_CONFIG.ruleset, dailyLimit: DEFAULT_CONFIG.daily.placementLimit, dailyDate: '',
 });
 
 type ScreenId = 'splash' | 'home' | 'game';
-type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials';
+type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials' | 'dailyResults' | 'dailyHub' | 'rankings';
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** A challenge id as a friendly date ("27 November 2026"); it is a UTC date, shown as such. */
+const dayLabel = (id: string, year = true) => { const [y, m, d] = id.split('-').map(Number); return `${d} ${MONTHS[m - 1]}${year ? ` ${y}` : ''}`; };
+const fmtCountdown = (ms: number) => { const m = Math.max(0, Math.floor(ms / 60000)); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
 
 export class App {
   private cfg: GameConfig = structuredClone(DEFAULT_CONFIG);
@@ -100,6 +122,19 @@ export class App {
   private levelStartedMoves = 0;
   /** What this game earned for the first time (results screen). */
   private earned = { materials: [] as MaterialDef[], achievements: [] as AchievementDef[], chainRecord: false };
+  // Build 4
+  private daily: DailyRecords = parseDailyRecords(load(KEYS.dailyRecords));
+  private gcQueue: PendingSubmission[] = (() => {
+    try { const q = JSON.parse(load(KEYS.gcQueue) ?? '[]'); return Array.isArray(q) ? q : []; } catch { return []; }
+  })();
+  /** The Daily attempt in progress (its number makes each run's record unique). */
+  private dailyRun: { id: string; attempt: number } | null = null;
+  private lastDailyInfo: DailyShareInfo | null = null;
+  private calMonth = { y: 0, m: 0 };
+  private rankBoard: LeaderboardKey = 'classic';
+  /** Firsts in this game, for time-to-first analytics. */
+  private firsts = { line: false, pulse: false, od: false };
+  private lastEndAt = 0;
 
   private tutorialIndex = -1;
   private editMode = false;
@@ -117,6 +152,8 @@ export class App {
     const canvas = $<HTMLCanvasElement>('board');
     this.view = new GameView(canvas, () => this.session.state);
     this.view.rotation = this.cfg.rotation;
+    this.view.effective = (st) => effectiveRotation(this.cfg, st);
+    this.syncViewConfig();
     this.rotateBtns = [...document.querySelectorAll<HTMLButtonElement>('.rotate-btn')];
     new InputController(canvas, this.view, () => this.session.state, {
       canPick: () => !this.session.locked && !this.view.animator.busy && !this.session.state.over && !this.overlay,
@@ -135,7 +172,9 @@ export class App {
     this.bindUi();
     this.lifecycle();
     track('game_launched');
+    track('session_started', { games: this.stats.gamesPlayed, days: this.stats.days.length, firstDay: this.stats.days[0] ?? '' });
     this.checkSave();
+    this.flushGameCenter();
     this.startSplash();
   }
 
@@ -153,13 +192,23 @@ export class App {
     this.view.resize();
     paintLogoCanvas($<HTMLCanvasElement>('navLogo'));
     this.refreshRotateButtons();
+    this.updateOverdriveHud();
+  }
+
+  /** Renderer settings that follow the config (Overdrive look, rotation rules). */
+  private syncViewConfig() {
+    const O = this.cfg.overdrive;
+    this.view.rotation = this.cfg.rotation;
+    this.view.odRotation = O.rotation;
+    this.view.odDuration = O.duration;
+    this.view.odMult = O.multiplier;
   }
 
   private openOverlay(id: OverlayId) {
     if (this.overlay) $(this.overlay).hidden = true;
     this.overlay = id;
     $(id).hidden = false;
-    $(id).querySelector<HTMLElement>('button, input')?.focus({ preventScroll: true });
+    ($(id).querySelector<HTMLElement>('[data-focus]') ?? $(id).querySelector<HTMLElement>('button, input'))?.focus({ preventScroll: true });
   }
 
   private closeOverlay() {
@@ -187,11 +236,21 @@ export class App {
     const og = orb.getContext('2d')!;
     og.setTransform(1, 0, 0, 1, 0, 0); og.clearRect(0, 0, orb.width, orb.height);
     drawOrbIcon(og, orb.width, 0, 0, 0, false);
-    $('homeBest').innerHTML = this.stats.bestScore > 0 ? `PERSONAL BEST <b>${fmt(this.stats.bestScore)}</b>` : '';
-    $('homeLevel').innerHTML = this.stats.highestLevel > 1
-      ? `HIGHEST LEVEL <b>${this.stats.highestLevel}</b> · ${levelTitle(this.cfg.progression, this.stats.highestLevel).toUpperCase()}` : '';
+    const s = this.stats;
+    $('homeBest').innerHTML = s.bestScore > 0 ? `Personal best <b>${fmt(s.bestScore)}</b>` : s.legacyBestScore > 0 ? `Build 3 rules best <b>${fmt(s.legacyBestScore)}</b>` : 'Place, clear and chain Pulses';
+    $('homeLevel').innerHTML = s.highestLevel > 1 ? `Highest level <b>${s.highestLevel}</b> · ${levelTitle(this.cfg.progression, s.highestLevel)}` : '';
     $('btnContinue').hidden = !inspectSave(load(KEYS.save), this.cfg).data;
-    this.applyMaterial(this.stats.highestLevel);
+    // Daily card: today's status, streak, countdown.
+    const id = this.today();
+    const day = this.daily.days[id];
+    const sk = streaks(this.daily, id);
+    const saved = this.dailySave();
+    $('homeDaily').innerHTML = day?.completed ? `Completed · best <b>${fmt(day.best)}</b> · next in ${fmtCountdown(this.msToNext())}`
+      : saved ? `In progress · <b>${saved.state.stats.moves}/${saved.state.daily?.limit ?? 30}</b> placements` : "Today's challenge awaits";
+    $('homeStreak').innerHTML = sk.current > 0 ? `Current streak <b>${sk.current} day${sk.current === 1 ? '' : 's'}</b>` : sk.longest > 0 ? `Longest streak <b>${sk.longest}</b>` : '';
+    $('btnDaily').classList.toggle('done', !!day?.completed);
+    this.applyMaterial(s.highestLevel);
+    this.flushGameCenter();
   }
 
   /** Build 1 saves migrate; anything that can't be restored is cleared with an explanation. Records are kept. */
@@ -218,7 +277,14 @@ export class App {
     $('scores').style.visibility = '';
     $('status').style.visibility = '';
     $('levelHud').style.visibility = '';
-    this.session = new GameSession(state ?? newGame(newSeed(), this.cfg), this.cfg);
+    this.session = new GameSession(state ?? this.freshClassic(), this.cfg);
+    const daily = this.session.state.mode === 'daily';
+    if (!daily) this.dailyRun = null;
+    $('levelHud').classList.toggle('daily', daily);
+    this.firsts = { line: false, pulse: false, od: false };
+    this.view.odAvailable = this.session.state.od ? overState(this.session.state, this.cfg).odAvailable : false;
+    this.odRunScore = this.session.state.od?.active ? this.session.state.od.score : 0;
+    music.setIntensity(this.session.state.od?.active ? 1 : 0);
     const lvl = this.session.state.level ?? 1;
     this.displayedLevel = lvl;
     this.highestLevelAtStart = this.stats.highestLevel;
@@ -228,7 +294,8 @@ export class App {
     this.applyMaterial(lvl);
     this.rotatedSlots.clear();
     this.elapsedMs = restore?.elapsedMs ?? 0;
-    this.bestAtStart = restore?.bestAtStart ?? this.stats.bestScore;
+    this.bestAtStart = restore?.bestAtStart ?? (daily ? this.daily.days[this.session.state.daily!.id]?.best ?? 0
+      : (this.session.state.ruleset ?? 2) < 2 ? this.stats.legacyBestScore : this.stats.bestScore);
     this.chainRecordAtStart = this.stats.maxChain;
     this.celebratedBest = this.session.state.score > this.bestAtStart;
     this.displayedScore = this.session.state.score;
@@ -236,18 +303,127 @@ export class App {
     this.updateHud(true);
     this.setCombo(this.session.state.combo, false);
     $('chain').classList.remove('on');
+    this.updateOverdriveHud();
     this.show('game');
-    if (!restore) track('game_started', { seed: this.session.state.seed, rotationMode: this.cfg.rotation.mode, gameInSession: this.gamesThisSession + 1 });
+    if (!restore) {
+      track('game_started', { seed: this.session.state.seed, mode: this.session.state.mode, ruleset: this.session.state.ruleset ?? 2, rotationMode: this.cfg.rotation.mode, gameInSession: this.gamesThisSession + 1 });
+      // Played again within 10 s of a result: an immediate replay.
+      if (this.lastEndAt && Date.now() - this.lastEndAt < 10000) track('immediate_replay', { mode: this.session.state.mode });
+    }
     this.persist();
-    if (this.session.state.over) setTimeout(() => this.gameOver(), 600);
+    if (this.session.state.over) setTimeout(() => this.endGame(), 600);
   }
+
+  /** A new Classic game under the current ruleset (dev: optionally ruleset 1 for comparison). Dev games never submit. */
+  private freshClassic(): GameState {
+    const st = newGame(newSeed(), this.cfg, { ruleset: this.dev.ruleset === 1 ? 1 : undefined });
+    return this.devEnabled ? { ...st, dev: true } : st;
+  }
+
+  /** Today's challenge id (UTC). The developer menu can simulate another day. */
+  private today(): string {
+    return (!__RELEASE__ && /^\d{4}-\d{2}-\d{2}$/.test(this.dev.dailyDate)) ? this.dev.dailyDate : challengeId();
+  }
+
+  /** The ruleset-aware config for the running game (ruleset 1 games keep Build 3 thresholds). */
+  private rules(st: GameState = this.session.state): GameConfig { return rulesFor(this.cfg, st); }
 
   private play() {
     unlockAudio();
     const existing = inspectSave(load(KEYS.save), this.cfg).data;
-    if (existing) this.abandon(existing.state.score);
+    if (existing) this.abandon(existing);
     if (load(KEYS.tutorialDone) !== '1') this.startTutorial();
     else this.startClassic();
+  }
+
+  // ---------------------------------------------------------------- Build 4 Daily Challenge
+
+  /** A saved Daily for today, if any (an unfinished run from an earlier day is dropped: its day is over). */
+  private dailySave(): SaveData | null {
+    const save = inspectSave(load(KEYS.dailySave), this.cfg).data;
+    if (save && save.state.daily?.id !== this.today()) { remove(KEYS.dailySave); return null; }
+    return save;
+  }
+
+  private openDailyHub() {
+    const id = this.today();
+    const [y, m] = id.split('-').map(Number);
+    if (!this.calMonth.y) this.calMonth = { y, m };
+    this.renderDailyHub();
+    this.openOverlay('dailyHub');
+    this.wake();
+  }
+
+  private renderDailyHub() {
+    const id = this.today();
+    const day = this.daily.days[id];
+    const st = streaks(this.daily, id);
+    const saved = this.dailySave();
+    $('dhDate').textContent = dayLabel(id);
+    $('dhStatus').innerHTML = day?.completed
+      ? `Completed · today's best <b>${fmt(day.best)}</b>`
+      : saved ? `In progress · ${saved.state.stats.moves} of ${saved.state.daily?.limit ?? 30} placements` : "Today's challenge awaits";
+    const rows: [string, string][] = [
+      ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`], ['Completed', `${st.completed}`],
+      ['This month', `${st.thisMonth}`], ['Best daily', st.best ? fmt(st.best) : '–'], ['Today', day?.completed ? fmt(day.best) : '–'],
+    ];
+    $('dhStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    this.renderCalendar();
+    $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b> (midnight UTC)`;
+    $('btnDailyStart').textContent = saved ? 'CONTINUE' : day?.completed ? 'PLAY AGAIN' : 'START';
+  }
+
+  private msToNext() {
+    if (this.dev.dailyDate) return msUntilNextChallenge(Date.parse(`${this.today()}T12:00:00Z`));
+    return msUntilNextChallenge();
+  }
+
+  private renderCalendar() {
+    const today = this.today();
+    const { y, m } = this.calMonth;
+    const cal = monthCalendar(this.daily, today, y, m);
+    $('calMonth').textContent = `${MONTHS[m - 1]} ${y}`;
+    const dows = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<span class="dow">${d}</span>`).join('');
+    const label = { completed: 'completed', today: 'today', missed: 'not played', future: 'upcoming', before: '' } as const;
+    $('calGrid').innerHTML = dows + '<span></span>'.repeat(cal.leading) + cal.days.map((d) =>
+      `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}</span>`).join('');
+    const [ty, tm] = today.split('-').map(Number);
+    $<HTMLButtonElement>('calNext').disabled = y > ty || (y === ty && m >= tm);
+  }
+
+  private shiftMonth(delta: number) {
+    let { y, m } = this.calMonth;
+    m += delta;
+    if (m < 1) { m = 12; y--; } if (m > 12) { m = 1; y++; }
+    this.calMonth = { y, m };
+    this.renderCalendar();
+  }
+
+  /** Starts (or continues) today's Daily Challenge. Identical for every player; replays allowed. */
+  private startDaily() {
+    unlockAudio();
+    this.overlayReturn = null;
+    if (this.overlay) this.closeOverlay();
+    const id = this.today();
+    const saved = this.dailySave();
+    if (saved) {
+      try { this.dailyRun = JSON.parse(load(KEYS.dailyRun) ?? 'null'); } catch { this.dailyRun = null; }
+      if (this.dailyRun?.id !== id) this.dailyRun = { id, attempt: this.daily.days[id]?.attempts ?? 1 };
+      this.startClassic(saved.state, { elapsedMs: saved.elapsedMs, bestAtStart: saved.bestAtStart });
+      return;
+    }
+    const cfg = { ...this.cfg, daily: { ...this.cfg.daily, placementLimit: this.dev.dailyLimit || this.cfg.daily.placementLimit } };
+    const ch = dailyChallenge(id, cfg);
+    const start = recordDailyStart(this.daily, id);
+    this.daily = start.records;
+    store(KEYS.dailyRecords, JSON.stringify(this.daily));
+    this.dailyRun = { id, attempt: this.daily.days[id].attempts };
+    let state = dailyGame(ch, cfg);
+    if (this.devEnabled) state = { ...state, dev: true };
+    track(start.replay ? 'daily_replayed' : 'daily_started', { day: id, attempt: this.dailyRun.attempt });
+    this.startClassic(state);
+    this.message('DAILY CHALLENGE', 'daily', [`${dayLabel(id).toUpperCase()} · ${ch.placementLimit} PLACEMENTS`]);
+    this.tip('daily-rules', `Everyone plays this same board and piece order today. Score as much as you can in ${ch.placementLimit} placements.`, 1400);
   }
 
   private continueGame() {
@@ -257,11 +433,16 @@ export class App {
     this.startClassic(save.state, { elapsedMs: save.elapsedMs, bestAtStart: save.bestAtStart });
   }
 
-  private abandon(score: number) {
-    track('game_abandoned', { score });
-    this.stats = recordGameEnd(this.stats, score);
+  private abandon(save: { state: GameState }) {
+    const st = save.state;
+    track('game_abandoned', { score: st.score, mode: st.mode, moves: st.stats.moves });
+    this.stats = recordGameEnd(this.stats, st.score, this.recordCtx(st));
     store(KEYS.stats, JSON.stringify(this.stats));
-    remove(KEYS.save);
+    remove(st.mode === 'daily' ? KEYS.dailySave : KEYS.save);
+  }
+
+  private recordCtx(st: GameState): RecordContext {
+    return { mode: st.mode, ruleset: st.ruleset ?? 2, game: st.stats };
   }
 
   private rotate(slot: number) {
@@ -274,7 +455,7 @@ export class App {
       if (this.session.lastRejection === 'no-energy') {
         sfx.denied(); haptic('invalid');
         this.view.denied = performance.now();
-        if (st.mode === 'classic') track('rotation_denied', { piece: piece.defId });
+        if (st.mode !== 'tutorial') track('rotation_denied', { piece: piece.defId });
         this.wake();
       }
       return;
@@ -283,10 +464,10 @@ export class App {
     this.view.rotating.set(slot, now);
     if (out.cost > 0) this.view.drain = { seg: out.state.energy, start: now };
     sfx.rotate(); haptic('rotate');
-    if (st.mode === 'classic') {
+    if (st.mode !== 'tutorial') {
       this.rotatedSlots.add(slot);
-      track('rotation_performed', { piece: piece.defId, cost: out.cost, energyLeft: out.state.energy });
-      this.stats = recordRotation(this.stats, out.cost);
+      track('rotation_performed', { piece: piece.defId, cost: out.cost, energyLeft: out.state.energy, free: out.free, mode: st.mode });
+      this.stats = recordRotation(this.stats, out.cost, out.free);
       this.grant();
       this.persist();
     }
@@ -301,6 +482,8 @@ export class App {
     if (tutorial) this.view.tutorialTarget = null;
     const lines = result.rows.length + result.cols.length;
     sfx.place(); haptic('place');
+    if (result.odGained > 0) { this.view.odPulse = performance.now(); sfx.odCharge(result.odChargeAfter); }
+    if (result.odActive) this.odRunScore += result.points.total;
     if (!tutorial) {
       const rotated = this.rotatedSlots.has(slot);
       track('piece_placed', { piece: result.piece.defId, rot: result.piece.rot ?? 0, lines, combo: result.combo, chain: result.chain, rotated });
@@ -312,7 +495,18 @@ export class App {
       if (lines) track('lines_cleared', { count: lines, combo: result.combo, energyGained: result.energyGained });
       if (result.chain) { track('pulse_activated', { count: result.chain }); track('chain_size', { size: result.chain }); }
       const st = this.session.state;
-      this.stats = recordMove(this.stats, result, { seed: st.seed, moves: st.stats.moves });
+      const ms = Math.round(this.elapsedMs);
+      if (st.stats.moves === 1) track('first_placement', { ms, mode: st.mode });
+      if (lines && !this.firsts.line) { this.firsts.line = true; track('first_line', { ms, placements: st.stats.moves, mode: st.mode }); }
+      if (result.chain && !this.firsts.pulse) { this.firsts.pulse = true; track('first_pulse', { ms, placements: st.stats.moves, mode: st.mode }); }
+      if (result.comboProtected) track('combo_protected', { combo: result.combo });
+      if (result.odGained > 0) track('overdrive_energy_earned', { amount: result.odGained, meter: result.odChargeAfter });
+      if (result.odReady) track('overdrive_ready', { ms, placements: st.stats.moves, first: !this.firsts.od });
+      if (result.perfect) track('perfect_clear', { lines, chain: result.chain, overdrive: result.odActive });
+      if (result.odEnded) track('overdrive_completed', { score: st.stats.odBestScore, placements: this.cfg.overdrive.duration });
+      // Daily credit keys include the attempt, so replays of the same seed are credited separately.
+      const creditSeed = st.mode === 'daily' ? (st.seed ^ ((this.dailyRun?.attempt ?? 0) * 2654435761)) >>> 0 : st.seed;
+      this.stats = recordMove(this.stats, result, { seed: creditSeed, moves: st.stats.moves }, undefined, this.recordCtx(st));
       if (result.chain >= 2 && result.chain > this.chainRecordAtStart && this.chainRecordAtStart > 0) this.earned.chainRecord = true;
       if (result.levelAfter > result.levelBefore) {
         for (let L = result.levelBefore + 1; L <= result.levelAfter; L++) {
@@ -335,7 +529,9 @@ export class App {
       onLines: (r) => {
         const n = r.rows.length + r.cols.length;
         sfx.clear(n, r.combo);
-        haptic(n >= 3 ? 'big' : 'clear');
+        sfx.comboUp(r.combo);
+        haptic(n >= 3 ? 'big' : n === 2 ? 'multi' : 'clear');
+        if (r.shieldRestored) this.animateShield('restore');
         this.displayedScore = tutorial ? 0 : r.scoreAfter;
         this.updateHud();
         this.setCombo(r.combo, true);
@@ -343,7 +539,7 @@ export class App {
       },
       onWave: (i, wave, r) => {
         sfx.pulse(i, wave.pulses.length);
-        haptic(i >= 1 || wave.pulses.length > 1 ? 'big' : 'pulse');
+        haptic(r.chain >= 4 && i === r.waves.length - 1 ? 'majorChain' : i >= 1 || wave.pulses.length > 1 ? 'big' : 'pulse');
         const activated = r.waves.slice(0, i + 1).reduce((s, w) => s + w.pulses.length, 0);
         if (activated >= 2) this.setChain(activated);
         if (i === r.waves.length - 1) this.celebrate(r, 'chain');
@@ -351,12 +547,19 @@ export class App {
       onEnergy: (seg) => { sfx.energy(seg); this.refreshRotateButtons(); this.wake(); },
       onLevelUp: (r) => this.levelUp(r, fromMat.id !== toMat.id ? this.cfg.materials.find((m) => m.id === toMat.id) ?? null : null),
       onDone: (r) => this.afterResolution(r),
-    }, { material: fromMat.id !== toMat.id ? { from: fromMat, to: toMat } : undefined, levelMs: this.dev.levelMs, materialMs: this.dev.materialMs });
+    }, { material: fromMat.id !== toMat.id ? { from: fromMat, to: toMat } : undefined, levelMs: this.dev.levelMs, materialMs: this.dev.materialMs, overdrive: result.odActive });
     if (lines === 0) {
       this.displayedScore = tutorial ? 0 : result.scoreAfter;
       this.updateHud();
       this.setCombo(result.combo, false);
+      if (result.comboProtected) {
+        this.message('COMBO PROTECTED', 'shieldmsg');
+        sfx.shield(); haptic('shield');
+        this.animateShield('used');
+        this.tip('shield', 'Combo Protection kept your combo alive. Clear a line on your next move or it resets.', 900);
+      }
     }
+    this.updateOverdriveHud();
     this.refreshRotateButtons();
     this.wake();
     return true;
@@ -374,43 +577,76 @@ export class App {
     }
     this.flushProgressNotices();
     if (r.levelAfter === r.levelBefore) this.contextTip(r);
+    // Overdrive notices come after the move's own celebration.
+    if (r.odReady) {
+      sfx.odReady(); haptic('record');
+      this.message('OVERDRIVE READY', 'odready', ['TAP THE METER WHEN YOU WANT IT']);
+      this.tip('od-ready', "Activate Overdrive whenever you're ready. Your next five placements earn double points and free rotations.", 600);
+    }
+    if (r.odEnded) {
+      sfx.odEnd(); music.setIntensity(0);
+      this.message('OVERDRIVE COMPLETE', 'odready', [`+${fmt(this.odRunScore)} POINTS IN OVERDRIVE`]);
+    } else if (r.odActive && r.odLeft === 1) {
+      this.message('FINAL OVERDRIVE PLACEMENT', '');
+    }
+    if (r.odGained > 0 && !r.odReady && !this.firsts.od && r.odChargeAfter >= 10) {
+      this.firsts.od = true;
+      this.tip('od-meter', 'Clearing lines and firing Pulses charges Overdrive. Fill the meter to unlock double points.', 700);
+    }
+    this.view.odAvailable = r.odAvailable;
+    if (r.odAvailable) {
+      this.message('OVERDRIVE AVAILABLE', 'odready', ['ACTIVATE IT TO KEEP PLAYING']);
+      haptic('invalid');
+    }
+    if (r.limitReached) this.message('CHALLENGE COMPLETE', 'daily', [`${r.placementsUsed} OF ${r.placementsUsed} PLACEMENTS`]);
+    this.updateOverdriveHud();
     if (r.gameOver) {
-      remove(KEYS.save);
-      setTimeout(() => this.gameOver(), 650);
+      remove(this.session.state.mode === 'daily' ? KEYS.dailySave : KEYS.save);
+      setTimeout(() => this.endGame(), r.limitReached ? 1300 : 650);
     }
   }
+
+  /** Points earned in the current (or just finished) Overdrive activation. */
+  private odRunScore = 0;
 
   /** Line messages when lines clear; chain messages when the last wave lands. Ordinary moves stay quiet. */
   private celebrate(r: MoveResult, phase: 'lines' | 'chain') {
     const lines = r.rows.length + r.cols.length;
     const tutorial = this.session.state.mode === 'tutorial';
-    const out: [string, string][] = [];
+    const out: { t: string; k: string; sub: string[] }[] = [];
+    const add = (t: string, k = '', sub: string[] = []) => out.push({ t, k, sub });
+    const mult = this.rules().scoring.comboMultipliers;
     if (phase === 'lines' && r.chain === 0) {
-      if (lines >= 4) out.push([lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big']);
-      else if (lines === 3) out.push(['TRIPLE CLEAR', 'big']);
-      else if (lines === 2) out.push(['DOUBLE CLEAR', '']);
+      if (lines >= 4) add(lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big');
+      else if (lines === 3) add('TRIPLE CLEAR', 'big');
+      else if (lines === 2) add('DOUBLE CLEAR');
       // Top multiplier reached (and every move it holds there): 3.0× with the default table.
-      if (r.combo === this.cfg.scoring.comboMultipliers.length) out.push(['MASSIVE COMBO ×' + Math.max(...this.cfg.scoring.comboMultipliers).toFixed(1), 'big']);
-      else if (lines < 2 && r.combo >= 3) out.push(['GREAT MOVE', '']);
+      if (r.combo === mult.length) add('MASSIVE COMBO ×' + Math.max(...mult).toFixed(1), 'big');
+      else if (lines < 2 && r.combo >= 3) add('GREAT MOVE');
     }
     if (phase === 'chain') {
       const c = r.chain;
-      // PERFECT REACTION: the chain cleared every block left on the board.
-      const perfect = c >= 2 && r.boardAfterPlace.cells.every((cell, k) => !cell || r.lineCells.includes(k) || r.waves.some((w) => w.cleared.includes(k)));
-      out.push([perfect ? `PERFECT REACTION ×${c}` : c >= 5 ? `MASSIVE REACTION ×${c}` : c >= 3 ? `CHAIN REACTION ×${c}` : c === 2 ? 'DOUBLE PULSE' : 'PULSE ACTIVATED', c >= 2 ? 'big' : '']);
-      if (!tutorial && c >= 2 && c > this.chainRecordAtStart && this.chainRecordAtStart > 0) { out.push(['NEW CHAIN RECORD', 'record']); this.chainRecordAtStart = c; }
+      add(c >= 5 ? `MASSIVE REACTION ×${c}` : c >= 3 ? `CHAIN REACTION ×${c}` : c === 2 ? 'DOUBLE PULSE' : 'PULSE ACTIVATED', c >= 2 ? 'big' : '');
+      if (!tutorial && c >= 2 && c > this.chainRecordAtStart && this.chainRecordAtStart > 0) { add('NEW CHAIN RECORD', 'record'); this.chainRecordAtStart = c; }
       if (c >= 4) sfx.majorChain(c);
     }
     const last = phase === 'chain' || r.chain === 0;
     if (last && !tutorial) {
-      const boardClear = r.boardAfterPlace.cells.every((c, k) => !c || r.lineCells.includes(k) || r.waves.some((w) => w.cleared.includes(k)));
-      if (boardClear && r.chain < 2) out.push(['BOARD CLEAR', 'big']);
+      // Perfect Board Clear: one combined celebration that leads, with its bonus.
+      if (r.perfect) {
+        const bonus = Math.round(this.rules().scoring.perfectClear * r.points.multiplier * r.points.overdrive);
+        out.unshift({ t: 'PERFECT CLEAR', k: 'perfect', sub: bonus > 0 ? [`+${fmt(bonus)} BONUS`] : [] });
+        setTimeout(() => { sfx.perfect(); haptic('perfect'); }, 250);
+        this.tip('perfect', 'Perfect Clear! Emptying the whole board earns a big bonus.', 1800);
+      }
       if (!this.celebratedBest && this.bestAtStart > 0 && r.scoreAfter > this.bestAtStart) {
         this.celebratedBest = true;
-        out.push(['NEW PERSONAL BEST', 'record']);
+        add(this.session.state.mode === 'daily' ? 'NEW DAILY BEST' : 'NEW PERSONAL BEST', 'record');
       }
+      // In Overdrive the move's points were multiplied: say so on its lead message.
+      if (r.odActive && out.length) out[0].sub.push(`${this.cfg.overdrive.multiplier}× OVERDRIVE POINTS`);
     }
-    for (const [text, kind] of out) this.message(text, kind);
+    for (const m of out) this.message(m.t, m.k, m.sub);
   }
 
   // ---------------------------------------------------------------- Build 3 progression
@@ -454,7 +690,9 @@ export class App {
       sfx.unlock(); haptic('unlock');
     }
     if (achievements.length) {
-      const text = achievements.length === 1 ? `Achievement: ${achievements[0].name}` : `${achievements.length} achievements: ${achievements.map((a) => a.name).join(', ')}`;
+      const n = achievements.length;
+      const text = n === 1 ? `Achievement: ${achievements[0].name}` : n === 2 ? `Achievements: ${achievements[0].name} and ${achievements[1].name}`
+        : `${n} achievements: ${achievements[0].name}, ${achievements[1].name} and ${n - 2} more`;
       // Wait for a showing banner (level-up, unlock) so the toast never covers it.
       const busy = this.messageTimer !== null || this.messageQueue.length > 0;
       setTimeout(() => { this.toast(text, 'achv'); sfx.achievement(); }, materials.length ? 900 : busy ? 1400 : 0);
@@ -469,12 +707,13 @@ export class App {
     const el = $('levelHud');
     el.classList.remove('up'); void el.offsetWidth; el.classList.add('up');
     const gained = r.levelAfter - r.levelBefore;
-    const sub = [`LEVEL ${r.levelAfter} — ${levelTitle(this.cfg.progression, r.levelAfter).toUpperCase()}`];
+    const P = this.rules().progression;
+    const sub = [`LEVEL ${r.levelAfter} — ${levelTitle(P, r.levelAfter).toUpperCase()}`];
     if (r.levelEnergy > 0) sub.push(this.cfg.progression.levelUpEnergy === 'full' ? 'ROTATION ENERGY RESTORED' : `+${r.levelEnergy} ROTATION ENERGY`);
     // A permanent unlock earned by this level-up joins the one celebration instead of a separate banner.
     const unlocked = this.pendingNotices.materials.splice(0);
     for (const m of unlocked) sub.push(`NEW MATERIAL UNLOCKED: ${m.name.toUpperCase()}`);
-    sub.push(`NEXT: ${fmt(levelThreshold(this.cfg.progression, r.levelAfter + 1))} FOR LEVEL ${r.levelAfter + 1}`);
+    sub.push(`NEXT: ${fmt(levelThreshold(P, r.levelAfter + 1))} FOR LEVEL ${r.levelAfter + 1}`);
     if (unlocked.length) { setTimeout(() => { sfx.unlock(); haptic('unlock'); }, 600); this.tip('unlock', 'Unlocked materials stay yours. Choose one any time in Materials.', 6500); }
     this.clearMessages();
     this.message(gained > 1 ? `LEVEL UP ×${gained}` : 'LEVEL UP', 'lvlup', sub);
@@ -488,11 +727,17 @@ export class App {
 
   /** Shows a one-time contextual tip (saved so it never repeats). Returns whether it showed. */
   private tip(id: string, text: string, delay = 0): boolean {
-    if (this.session.state.mode !== 'classic' || this.stats.tipsSeen.includes(id)) return false;
+    if (this.session.state.mode === 'tutorial' || this.stats.tipsSeen.includes(id)) return false;
     this.stats = { ...this.stats, tipsSeen: [...this.stats.tipsSeen, id] };
     store(KEYS.stats, JSON.stringify(this.stats));
     // Tips wait for any showing banner so they never cover a celebration.
     const show = (tries: number) => {
+      // The game ended meanwhile: keep the tip for another time rather than covering the results.
+      if (this.overlay || this.screen !== 'game') {
+        this.stats = { ...this.stats, tipsSeen: this.stats.tipsSeen.filter((t) => t !== id) };
+        store(KEYS.stats, JSON.stringify(this.stats));
+        return;
+      }
       if (tries > 0 && (this.messageTimer !== null || this.messageQueue.length > 0)) setTimeout(() => show(tries - 1), 350);
       else this.toast(text, 'tip');
     };
@@ -502,12 +747,27 @@ export class App {
 
   /** After the first line ever: explain the level bar. */
   private contextTip(r: MoveResult) {
-    if (r.rows.length + r.cols.length > 0) this.tip('progress', `Points fill the level bar. Reach ${fmt(levelProgress(this.cfg.progression, r.scoreAfter).next)} for Level 2.`);
+    if (this.session.state.mode === 'classic' && r.rows.length + r.cols.length > 0) this.tip('progress', `Points fill the level bar. Reach ${fmt(levelProgress(this.rules().progression, r.scoreAfter).next)} for Level 2.`);
   }
 
   /** Level row: title, score against the next threshold, a bar relative to this level's own start. */
   private updateLevelHud() {
-    const P = this.cfg.progression;
+    const st = this.session.state;
+    if (st.mode === 'daily' && st.daily) {
+      // Daily: the bar shows placements used of the limit; no levels.
+      const used = st.stats.moves, limit = st.daily.limit;
+      $('levelNum').textContent = 'DAILY';
+      $('levelTitle').textContent = dayLabel(st.daily.id, false).toUpperCase();
+      $('levelPts').innerHTML = `<b>${used}</b> / ${limit} placements`;
+      $('levelLeft').textContent = used >= limit ? 'COMPLETE' : `${limit - used} left`;
+      $<HTMLElement>('levelFill').style.width = `${((used / limit) * 100).toFixed(1)}%`;
+      const el = $('levelHud');
+      el.classList.toggle('near', limit - used <= 3 && used < limit);
+      el.classList.remove('full');
+      el.setAttribute('aria-label', `Daily Challenge, ${used} of ${limit} placements used.`);
+      return;
+    }
+    const P = this.rules().progression;
     const score = this.displayedScore, level = this.displayedLevel;
     const start = levelThreshold(P, level), next = levelThreshold(P, level + 1);
     // Once the score crosses the threshold the bar holds full until the level-up celebration plays.
@@ -524,66 +784,283 @@ export class App {
     el.setAttribute('aria-label', `Level ${level}, ${levelTitle(P, level)}. ${fmt(score)} of ${fmt(next)} points. ${fmt(Math.max(0, next - score))} to go.`);
   }
 
+  /** The game ended (no legal move, or the Daily placement limit). */
+  private endGame() {
+    const st = this.session.state;
+    this.gamesThisSession++;
+    this.stats = recordSessionGames(recordGameEnd(addPlayTime(this.stats, this.unbankedMs), st.score, this.recordCtx(st)), this.gamesThisSession);
+    this.unbankedMs = 0;
+    store(KEYS.stats, JSON.stringify(this.stats));
+    this.lastEndAt = Date.now();
+    music.setIntensity(0);
+    this.view.odAvailable = false;
+    const occupancy = st.board.cells.filter(Boolean).length;
+    track('game_ended', { score: st.score, mode: st.mode, ruleset: st.ruleset ?? 2, level: st.level, material: currentMaterial().id, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs), occupancy, energyLeft: st.energy, rotations: st.stats.rotations, overdrives: st.stats.odActivations, perfect: st.stats.perfectClears, gameInSession: this.gamesThisSession });
+    track('game_completed', { mode: st.mode, score: st.score, ms: Math.round(this.elapsedMs) });
+    if (st.mode === 'daily') { this.dailyOver(); return; }
+    this.gameOver();
+  }
+
   private gameOver() {
     const st = this.session.state;
     const prevBest = this.bestAtStart;
-    this.gamesThisSession++;
-    this.stats = recordSessionGames(recordGameEnd(addPlayTime(this.stats, this.unbankedMs), st.score), this.gamesThisSession);
-    this.unbankedMs = 0;
-    store(KEYS.stats, JSON.stringify(this.stats));
-    const occupancy = st.board.cells.filter(Boolean).length;
-    track('game_ended', { score: st.score, level: st.level, material: currentMaterial().id, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs), occupancy, energyLeft: st.energy, rotations: st.stats.rotations, gameInSession: this.gamesThisSession });
+    const legacy = (st.ruleset ?? 2) < 2;
+    // Classic ruleset 2 records go to Game Center (best scores only; the queue keeps the best per board).
+    if (!legacy) {
+      this.submit('classic', st.score);
+      this.submit('level', st.level ?? 1);
+    }
+    if (st.stats.maxChain > 0) this.submit('chain', st.stats.maxChain);
     const newRecord = st.score > prevBest && st.score > 0;
     sfx.gameOver(); haptic(newRecord ? 'record' : 'clear');
     if (newRecord) setTimeout(() => sfx.record(), 500);
-    // Accomplishments, most significant first (the first one is highlighted).
     const level = st.level ?? 1;
-    const levelRecord = level > this.highestLevelAtStart;
-    const acc: [string, string][] = [];
-    if (newRecord) acc.push(['NEW PERSONAL BEST', '']);
-    if (levelRecord && level > 1) acc.push(['NEW LEVEL RECORD', '']);
-    for (const m of this.earned.materials) acc.push([`${m.name.toUpperCase()} UNLOCKED`, 'mat']);
-    if (this.earned.achievements.length) acc.push([this.earned.achievements.length === 1 ? `NEW ACHIEVEMENT · ${this.earned.achievements[0].name.toUpperCase()}` : `${this.earned.achievements.length} NEW ACHIEVEMENTS`, '']);
-    if (this.earned.chainRecord) acc.push(['NEW CHAIN RECORD', '']);
-    $('resAcc').innerHTML = acc.map(([t, k], i) => `<li class="${[k, i === 0 ? 'top' : ''].join(' ').trim()}">${t}</li>`).join('');
-    $('resAcc').hidden = !acc.length;
-    const title = levelTitle(this.cfg.progression, level);
-    $('resLevel').innerHTML = `LEVEL <b>${level}</b> — <b>${title.toUpperCase()}</b>`;
+    const levelRecord = level > this.highestLevelAtStart && level > 1;
+    // One highlighted accomplishment: the most significant thing this game did that the headline doesn't already say.
+    const kicker = newRecord ? 'NEW PERSONAL BEST' : levelRecord ? 'NEW LEVEL RECORD' : 'GAME OVER';
+    const candidates: ([string, string] | false)[] = [
+      newRecord && ['NEW PERSONAL BEST', ''],
+      levelRecord && ['NEW LEVEL RECORD', ''],
+      (st.stats.maxChain >= 4 || this.earned.chainRecord) && ['MASSIVE CHAIN REACTION', ''],
+      st.stats.perfectClears > 0 && [st.stats.perfectClears > 1 ? `PERFECT CLEAR ×${st.stats.perfectClears}` : 'PERFECT CLEAR', ''],
+      this.earned.materials.length > 0 && [`${this.earned.materials[this.earned.materials.length - 1].name.toUpperCase()} UNLOCKED`, 'mat'],
+      (st.stats.odActivations >= 2 || st.stats.odBestScore >= 5000) && ['OVERDRIVE MASTER', ''],
+      this.earned.achievements.length > 0 && [`NEW ACHIEVEMENT · ${this.earned.achievements[0].name.toUpperCase()}`, ''],
+    ];
+    const top = (candidates.filter(Boolean) as [string, string][]).find(([t]) => t !== kicker) ?? null;
+    $('resAcc').innerHTML = top ? `<li class="${[top[1], 'top'].join(' ').trim()}">${top[0]}</li>` : '';
+    $('resAcc').hidden = !top;
+    const P = this.rules(st).progression;
+    const title = levelTitle(P, level);
+    $('resLevel').innerHTML = `LEVEL <b>${level}</b> — <b>${title.toUpperCase()}</b>${legacy ? ' · BUILD 3 RULES' : ''}`;
     $('resLvl').textContent = String(level);
     $('resLvlBest').textContent = String(this.stats.highestLevel);
-    const next = nextMilestone(this.stats, this.cfg);
-    $('resNext').innerHTML = next ? `Next: <b>${next}</b>` : '';
-    const kicker = newRecord ? 'NEW PERSONAL BEST' : levelRecord && level > 1 ? 'NEW LEVEL RECORD' : 'GAME OVER';
+    const dailyDone = !!this.daily.days[this.today()]?.completed;
+    const next = !dailyDone ? "Complete today's Daily Challenge" : nextMilestone(this.stats, this.cfg) ?? `Beat your personal best of ${fmt(this.stats.bestScore)}`;
+    $('resNext').innerHTML = `Next: <b>${next}</b>`;
     const mat = activeMaterial(this.cfg, this.stats, level);
-    const message = level >= 10 ? `I reached ${title}. How far can you go?`
-      : this.earned.chainRecord && st.stats.maxChain >= 3 ? 'My biggest chain reaction yet.'
-      : levelRecord && level >= 3 ? `I reached Level ${level}. How far can you go?`
-      : level >= 7 ? 'Can you become a Quantum Master?'
+    const message = this.earned.chainRecord && st.stats.maxChain >= 3 ? 'Can you trigger a bigger chain reaction?'
+      : level >= 3 && (levelRecord || level >= 6) ? `I reached Level ${level} in BLOQ.`
       : 'Can you beat my score?';
-    this.lastResultInfo = { score: st.score, best: this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord, level, title, material: mat, message };
+    this.lastResultInfo = { score: st.score, best: legacy ? this.stats.legacyBestScore : this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord, level, title, material: mat, message, overdrives: st.stats.odActivations };
     $('resKicker').textContent = kicker;
     $('resKicker').classList.toggle('record', kicker !== 'GAME OVER');
     $('resScore').textContent = fmt(st.score);
-    $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(this.stats.bestScore)}`;
+    const bestNow = legacy ? this.stats.legacyBestScore : this.stats.bestScore;
+    $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(bestNow)}${legacy ? ' (Build 3 rules)' : ''}`;
     $('resLines').textContent = fmt(st.stats.linesCleared);
     $('resMaxLines').textContent = st.stats.maxLinesAtOnce ? `${st.stats.maxLinesAtOnce}` : '–';
-    const mult = this.cfg.scoring.comboMultipliers;
+    const mult = this.rules(st).scoring.comboMultipliers;
     $('resCombo').textContent = st.stats.maxCombo ? `×${mult[Math.min(st.stats.maxCombo, mult.length) - 1].toFixed(1)}` : '–';
     $('resChain').textContent = st.stats.maxChain ? `×${st.stats.maxChain}` : '–';
-    $('resRot').textContent = fmt(st.stats.rotations);
-    $('resTime').textContent = fmtTime(this.elapsedMs);
+    $('resOd').textContent = fmt(st.stats.odActivations ?? 0);
+    $('resPerfect').textContent = fmt(st.stats.perfectClears ?? 0);
     this.view.fade = 1;
     $('toast').classList.remove('on');
     this.openOverlay('results');
+    // After the first finished Classic game, introduce the Daily Challenge once.
+    if (!dailyDone && this.stats.gamesPlayed >= 1) this.tipAnywhere('daily-intro', "New: the Daily Challenge. Everyone plays the same board and pieces each day. Find it on the home screen.", 1500);
   }
 
+  /** Records a finished Daily run once, updates streaks, queues the score, and shows the Daily results. */
+  private dailyOver() {
+    const st = this.session.state;
+    const id = st.daily!.id;
+    const run = this.dailyRun ?? { id, attempt: this.daily.days[id]?.attempts ?? 1 };
+    const summary = { score: st.score, placements: st.stats.moves, lines: st.stats.linesCleared, maxCombo: st.stats.maxCombo, maxChain: st.stats.maxChain, overdrives: st.stats.odActivations, fullRun: st.stats.moves >= st.daily!.limit };
+    const up = recordDailyResult(this.daily, id, `${id}#${run.attempt}`, summary);
+    this.daily = up.records;
+    store(KEYS.dailyRecords, JSON.stringify(this.daily));
+    remove(KEYS.dailyRun);
+    const today = this.today();
+    const sk = streaks(this.daily, today);
+    this.stats = syncDaily(this.stats, { completed: sk.completed, current: sk.current, longest: sk.longest, best: sk.best });
+    store(KEYS.stats, JSON.stringify(this.stats));
+    this.grant();
+    if (up.counted) track('daily_completed', { day: id, score: st.score, attempt: run.attempt, first: up.firstCompletion, placements: st.stats.moves, streak: sk.current });
+    // Only today's challenge is submitted, and only its best score (dev games never submit).
+    if (id === today && up.newBest) this.submit('daily', st.score, id);
+    const day = this.daily.days[id];
+    sfx.gameOver(); haptic(up.newBest ? 'record' : 'clear');
+    if (up.newBest && up.previousBest > 0) setTimeout(() => sfx.record(), 500);
+    $('drKicker').textContent = up.newBest && up.previousBest > 0 ? 'NEW DAILY BEST' : summary.fullRun ? 'DAILY CHALLENGE COMPLETE' : 'NO MOVES LEFT';
+    $('drDate').textContent = `${dayLabel(id)} (UTC)`;
+    $('drScore').textContent = fmt(st.score);
+    $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Today's best ${fmt(day.best)}`;
+    $('drFirst').textContent = day.first !== null && (run.attempt > 1 || !up.firstCompletion) ? `First attempt ${fmt(day.first)} · attempt ${run.attempt}` : 'First attempt';
+    $('drPlaced').textContent = `${st.stats.moves}/${st.daily!.limit}`;
+    $('drLines').textContent = fmt(st.stats.linesCleared);
+    const mult = this.cfg.scoring.comboMultipliers;
+    $('drCombo').textContent = st.stats.maxCombo ? `×${mult[Math.min(st.stats.maxCombo, mult.length) - 1].toFixed(1)}` : '–';
+    $('drChain').textContent = st.stats.maxChain ? `×${st.stats.maxChain}` : '–';
+    $('drOd').textContent = fmt(st.stats.odActivations);
+    $('drDone').textContent = `${Math.round((st.stats.moves / st.daily!.limit) * 100)}%`;
+    $('drStreak').textContent = `${sk.current} day${sk.current === 1 ? '' : 's'}`;
+    $('drRank').textContent = '–';
+    $('drNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
+    this.lastDailyInfo = { day: id, score: st.score, rank: null, streak: sk.current, message: up.newBest && up.previousBest > 0 ? 'Can you beat my daily score?' : "Today's BLOQ challenge is complete.", material: currentMaterial() };
+    this.view.fade = 1;
+    $('toast').classList.remove('on');
+    this.openOverlay('dailyResults');
+    // A rank is shown only if Game Center actually returns one.
+    if (id === today && gameCenterSupported()) {
+      this.flushGameCenter().then(() => loadBoard('daily')).then((b) => {
+        const rank = b?.player?.rank;
+        if (rank && this.overlay === 'dailyResults') {
+          $('drRank').textContent = `#${fmt(rank)}`;
+          if (this.lastDailyInfo) this.lastDailyInfo.rank = rank;
+        }
+      });
+    }
+  }
+
+  // ---------------------------------------------------------------- Build 4 Game Center
+
+  /** Queues a score (best per board, today's only for the Daily) and tries to send the queue. Dev games never submit. */
+  private submit(board: LeaderboardKey, score: number, day?: string) {
+    const st = this.session.state;
+    if (st.dev || st.mode === 'tutorial' || !(score > 0)) return;
+    this.gcQueue = queueSubmission(this.gcQueue, { board, score, day, t: Date.now() });
+    store(KEYS.gcQueue, JSON.stringify(this.gcQueue));
+    this.flushGameCenter();
+  }
+
+  private async flushGameCenter() {
+    this.gcQueue = pruneExpired(this.gcQueue, this.today());
+    store(KEYS.gcQueue, JSON.stringify(this.gcQueue));
+    if (!gameCenterSupported() || !this.gcQueue.length) return;
+    this.gcQueue = await flushQueue(this.gcQueue, this.today());
+    store(KEYS.gcQueue, JSON.stringify(this.gcQueue));
+  }
+
+  private openRankings(board: LeaderboardKey = this.rankBoard) {
+    this.rankBoard = board;
+    track('leaderboard_viewed', { board, gameCenter: gameCenterSupported() });
+    this.renderRankings();
+    if (this.overlay !== 'rankings') this.openOverlay('rankings');
+  }
+
+  /** Game Center entries when they can be retrieved; otherwise the player's own records, clearly labelled. */
+  private renderRankings() {
+    const key = this.rankBoard;
+    document.querySelectorAll<HTMLButtonElement>('#rankings .seg-btn').forEach((b) => {
+      const on = b.dataset.board === key;
+      b.setAttribute('aria-checked', String(on)); b.setAttribute('aria-selected', String(on));
+    });
+    $('btnGameCenter').hidden = !gameCenterSupported();
+    const personal = (): string => {
+      const s = this.stats;
+      const today = this.today();
+      const days = Object.entries(this.daily.days).filter(([, d]) => d.completed).sort((a, b) => b[1].best - a[1].best).slice(0, 8);
+      const rows: [string, string][] = key === 'classic' ? [['Personal best', fmt(s.bestScore)], ...(s.legacyBestScore ? [['Build 3 rules best', fmt(s.legacyBestScore)] as [string, string]] : [])]
+        : key === 'level' ? [['Highest level', `${s.highestLevel} · ${levelTitle(this.cfg.progression, s.highestLevel)}`]]
+        : key === 'chain' ? [['Largest chain', s.maxChain ? `×${s.maxChain}` : '–'], ['Largest in Overdrive', s.odMaxChain ? `×${s.odMaxChain}` : '–']]
+        : [["Today's best", this.daily.days[today]?.completed ? fmt(this.daily.days[today].best) : 'Not played yet'], ...days.map(([id, d]) => [dayLabel(id), fmt(d.best)] as [string, string])];
+      return rows.map(([k, v], i) => `<li class="${i === 0 ? 'me' : ''}"><span class="rk">${i === 0 ? '★' : ''}</span><span>${k}</span><span class="sc">${v}</span></li>`).join('');
+    };
+    $('rankList').innerHTML = personal();
+    $('rankNote').textContent = gameCenterSupported() ? 'Connecting to Game Center…' : 'Game Center is not available here. Showing your personal records.';
+    if (!gameCenterSupported()) return;
+    loadBoard(key).then((b) => {
+      if (this.overlay !== 'rankings' || this.rankBoard !== key) return;
+      if (!b || !b.entries.length) { $('rankNote').textContent = b ? 'No scores on this leaderboard yet. Showing your personal records.' : 'Game Center unavailable right now. Showing your personal records.'; return; }
+      $('rankNote').textContent = `${LEADERBOARDS[key].name} · Game Center`;
+      const meRank = b.player?.rank;
+      $('rankList').innerHTML = b.entries.map((e) => `<li class="${e.rank === meRank ? 'me' : ''}"><span class="rk">#${e.rank}</span><span>${e.name}</span><span class="sc">${fmt(e.score)}</span></li>`).join('')
+        + (b.player && !b.entries.some((e) => e.rank === meRank) ? `<li class="me"><span class="rk">#${b.player.rank}</span><span>You</span><span class="sc">${fmt(b.player.score)}</span></li>` : '');
+    });
+  }
+
+  // ---------------------------------------------------------------- Build 4 Overdrive and Combo Protection
+
+  private activateOverdrive() {
+    if (this.overlay || this.view.drag || this.editMode || this.screen !== 'game') return;
+    const st0 = this.session.state;
+    if (st0.mode === 'tutorial' || !this.cfg.overdrive.enabled) return;
+    if (this.view.animator.busy) return;
+    const st = this.session.tryActivateOverdrive();
+    if (!st) {
+      if (this.session.lastRejection === 'not-charged') {
+        this.view.odPulse = performance.now();
+        if (!this.tip('od-meter', 'Clearing lines and firing Pulses charges Overdrive. Fill the meter to unlock double points.')) this.toast(`Overdrive ${Math.floor(st0.od?.charge ?? 0)}% charged`);
+        this.wake();
+      }
+      return;
+    }
+    const O = this.cfg.overdrive;
+    this.odRunScore = 0;
+    this.view.odAvailable = false;
+    this.view.animator.reduced = this.settings.reducedMotion;
+    this.view.animator.overdrive(performance.now());
+    sfx.odActivate(); haptic('overdrive'); music.setIntensity(1);
+    this.clearMessages();
+    this.message('OVERDRIVE ACTIVE', 'od', [`${O.multiplier}× POINTS${this.odBenefit() ? ` · ${this.odBenefit()}` : ''}`, `${O.duration} PLACEMENTS`]);
+    this.stats = recordOverdriveActivation(this.stats);
+    this.grant();
+    this.persist();
+    track('overdrive_activated', { placements: st.stats.moves, score: st.score, ms: Math.round(this.elapsedMs), mode: st.mode, rescue: !!overState({ ...st0, od: st0.od }, this.cfg).odAvailable });
+    this.updateOverdriveHud();
+    this.refreshRotateButtons();
+    this.wake();
+  }
+
+  /** The rotation benefit while Overdrive is active, as a short label. */
+  private odBenefit(): string {
+    const O = this.cfg.overdrive;
+    return O.rotation === 'free' ? 'FREE ROTATIONS' : O.rotation === 'limited' ? `${O.limitedFree} FREE ROTATIONS` : O.rotation === 'reduced' ? 'CHEAPER ROTATIONS' : '';
+  }
+
+  /** Compact HUD while Overdrive runs, and the activation control's state. */
+  private updateOverdriveHud() {
+    const st = this.session.state;
+    const od = st.od;
+    const hud = $('odHud');
+    const active = !!od && od.active > 0 && st.mode !== 'tutorial';
+    hud.hidden = !active;
+    document.getElementById('app')?.classList.toggle('od', active);
+    if (active) {
+      const benefit = this.cfg.overdrive.rotation === 'free' ? 'FREE TURNS' : this.cfg.overdrive.rotation === 'limited' ? `${od!.freeLeft} FREE TURNS` : this.cfg.overdrive.rotation === 'reduced' ? 'CHEAPER TURNS' : '';
+      // Compact: the rotation benefit shows on the energy meter itself (FREE TURNS).
+      hud.textContent = `${this.cfg.overdrive.multiplier}× POINTS · ${od!.active} LEFT`;
+      hud.classList.toggle('last', od!.active === 1);
+      hud.setAttribute('aria-label', `Overdrive active. ${this.cfg.overdrive.multiplier} times points${benefit ? `, ${benefit.toLowerCase()}` : ''}. ${od!.active} placement${od!.active === 1 ? '' : 's'} remaining.`);
+    }
+    const b = $<HTMLButtonElement>('btnOverdrive');
+    const show = !!od && st.mode !== 'tutorial' && this.cfg.overdrive.enabled && !!this.view.layout;
+    b.hidden = !show;
+    if (!show) return;
+    const r = this.view.odRect();
+    b.style.left = `${r.x}px`; b.style.top = `${r.y}px`; b.style.width = `${r.w}px`; b.style.height = `${r.h}px`;
+    const ready = od!.active === 0 && od!.charge >= 100;
+    b.classList.toggle('ready', ready);
+    b.setAttribute('aria-label', active ? `Overdrive active, ${od!.active} placements left` : ready ? 'Overdrive ready. Activate Overdrive' : `Overdrive ${Math.floor(od!.charge)} percent charged`);
+    b.setAttribute('aria-disabled', String(!ready));
+  }
+
+  private animateShield(kind: 'restore' | 'used') {
+    const el = $('comboShield');
+    el.classList.remove('restore', 'used'); void el.offsetWidth; el.classList.add(kind);
+    if (kind === 'restore') sfx.shieldRestore();
+  }
+
+  /** A one-time tip that may show over the results screen (not tied to a running game). */
+  private tipAnywhere(id: string, text: string, delay = 0) {
+    if (this.stats.tipsSeen.includes(id)) return;
+    this.stats = { ...this.stats, tipsSeen: [...this.stats.tipsSeen, id] };
+    store(KEYS.stats, JSON.stringify(this.stats));
+    setTimeout(() => this.toast(text, 'tip'), delay);
+  }
+
+  /** Saves after placements, rotations, Overdrive activation, level-ups and grants. Classic and Daily saves are separate. */
   private persist() {
     const st = this.session.state;
-    if (st.mode !== 'classic') return;
+    if (st.mode === 'tutorial') return;
     if (this.unbankedMs > 0) { this.stats = addPlayTime(this.stats, this.unbankedMs); this.unbankedMs = 0; }
     store(KEYS.stats, JSON.stringify(this.stats));
-    if (st.over) remove(KEYS.save);
-    else store(KEYS.save, serializeGame(st, this.elapsedMs, this.bestAtStart));
+    const key = st.mode === 'daily' ? KEYS.dailySave : KEYS.save;
+    if (st.over) remove(key);
+    else store(key, serializeGame(st, this.elapsedMs, this.bestAtStart));
+    if (st.mode === 'daily' && this.dailyRun) store(KEYS.dailyRun, JSON.stringify(this.dailyRun));
   }
 
   // ---------------------------------------------------------------- tutorial
@@ -652,8 +1129,12 @@ export class App {
       if (target - from >= 100) { scoreEl.classList.remove('bump'); void scoreEl.offsetWidth; scoreEl.classList.add('bump'); }
     }
     scoreEl.setAttribute('aria-label', `Current score ${target}`);
-    const live = this.session.state.mode === 'classic' ? this.session.state.score : 0;
-    const best = Math.max(this.stats.bestScore, live);
+    const st = this.session.state;
+    const live = st.mode === 'tutorial' ? 0 : st.score;
+    // Daily shows the day's best; a ruleset 1 game shows the labelled legacy record; Classic the ruleset 2 record.
+    const record = st.mode === 'daily' ? this.bestAtStart : (st.ruleset ?? 2) < 2 ? this.stats.legacyBestScore : this.stats.bestScore;
+    $('bestLabel').textContent = st.mode === 'daily' ? 'DAILY BEST' : (st.ruleset ?? 2) < 2 ? 'BEST (BUILD 3 RULES)' : 'PERSONAL BEST';
+    const best = Math.max(record, live);
     $('best').textContent = fmt(best);
     $('best').classList.toggle('record', live > 0 && live >= this.bestAtStart && live === best && this.bestAtStart > 0);
     this.updateLevelHud();
@@ -664,9 +1145,17 @@ export class App {
     const m = this.cfg.scoring.comboMultipliers;
     const mult = combo > 0 ? m[Math.min(combo, m.length) - 1] : 1;
     $('comboMult').textContent = `×${mult.toFixed(1)}`;
-    el.classList.toggle('on', combo >= 2);
+    el.classList.toggle('on', combo >= 1);
     el.setAttribute('aria-label', `Combo multiplier ${mult.toFixed(1)}`);
     [...$('comboMeter').children].forEach((seg, i) => seg.classList.toggle('lit', i < Math.min(combo, m.length)));
+    // Combo Protection: lit while it can save the combo, dim once spent (restored by the next clear).
+    const st = this.session.state;
+    const shieldOn = this.cfg.combo.protection > 0 && st.mode !== 'tutorial';
+    const sh = $('comboShield');
+    sh.hidden = !shieldOn;
+    const spent = (st.shield ?? 0) <= 0;
+    sh.classList.toggle('spent', spent);
+    sh.setAttribute('aria-label', combo > 0 ? (spent ? 'Combo Protection used: the next move must clear a line' : 'Combo Protection ready') : 'Combo Protection');
     if (animate && combo >= 2) { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); }
   }
 
@@ -722,7 +1211,9 @@ export class App {
   private refreshRotateButtons() {
     if (!this.view.layout) return;
     const st = this.session.state;
-    const rc = this.cfg.rotation;
+    const eff = effectiveRotation(this.cfg, st);
+    const rc = eff.rc;
+    const odFree = !!st.od?.active && this.cfg.rotation.mode === 'energy' && rc.mode === 'unlimited';
     const step = st.mode === 'tutorial' ? TUTORIAL_STEPS[this.tutorialIndex] : null;
     this.rotateBtns.forEach((b, slot) => {
       const piece = st.tray[slot];
@@ -732,13 +1223,14 @@ export class App {
       const pos = this.view.rotateButtonCenter(slot);
       b.style.left = `${pos.x}px`; b.style.top = `${pos.y}px`;
       const cost = rotationCost(rc, piece);
-      const affordable = rc.mode !== 'energy' || cost <= st.energy;
+      const affordable = rc.mode !== 'energy' || cost <= eff.energy;
       b.classList.toggle('off', !affordable);
       b.classList.toggle('free', affordable && cost === 0 && rc.mode === 'energy');
+      b.classList.toggle('odfree', odFree);
       const play = this.view.playabilityOf(slot);
       b.classList.toggle('hint', affordable && play === 'after-rotation' && !this.view.animator.busy && st.mode === 'classic');
       b.classList.toggle('tut', !!step?.rotate && (piece.rot ?? 0) !== (step.target.rot ?? 0));
-      b.setAttribute('aria-label', `Rotate piece ${slot + 1}${rc.mode !== 'energy' ? '' : cost === 0 ? ' (free, looks the same)' : affordable ? `, uses ${cost} energy` : ', no energy left'}`);
+      b.setAttribute('aria-label', `Rotate piece ${slot + 1}${odFree ? ' (free during Overdrive)' : rc.mode !== 'energy' ? '' : cost === 0 ? ' (free, looks the same)' : affordable ? `, uses ${cost} energy` : ', no energy left'}`);
       b.setAttribute('aria-disabled', String(!affordable));
     });
   }
@@ -756,7 +1248,7 @@ export class App {
     let keepGoing = false;
     if (this.screen === 'game') {
       const st = this.session.state;
-      if (st.mode === 'classic' && !st.over && !this.overlay && document.visibilityState === 'visible') {
+      if (st.mode !== 'tutorial' && !st.over && !this.overlay && document.visibilityState === 'visible') {
         this.elapsedMs += dt; this.unbankedMs += dt;
         keepGoing = true;
       }
@@ -777,6 +1269,9 @@ export class App {
   private applySettings() {
     const s = this.settings;
     setSoundEnabled(s.sound);
+    setSfxVolume(s.sfxVolume);
+    setMusicVolume(s.musicVolume);
+    setMusicEnabled(s.music);
     setHapticsEnabled(s.haptics);
     setHighContrast(s.highContrast);
     this.view.reduced = s.reducedMotion;
@@ -787,6 +1282,11 @@ export class App {
     $<HTMLInputElement>('setHaptics').checked = s.haptics;
     $<HTMLInputElement>('setMotion').checked = s.reducedMotion;
     $<HTMLInputElement>('setContrast').checked = s.highContrast;
+    $<HTMLInputElement>('setMusic').checked = s.music;
+    $<HTMLInputElement>('setSfxVol').value = String(s.sfxVolume);
+    $<HTMLInputElement>('setMusicVol').value = String(s.musicVolume);
+    $<HTMLInputElement>('setSfxVol').disabled = !s.sound;
+    $<HTMLInputElement>('setMusicVol').disabled = !s.music;
     if (this.screen === 'game') this.view.resize();
     this.wake();
   }
@@ -795,7 +1295,18 @@ export class App {
     const s = this.stats;
     const rows: [string, string][] = [
       ['Personal best', fmt(s.bestScore)],
+      ...(s.legacyBestScore ? [['Best, Build 3 rules', fmt(s.legacyBestScore)] as [string, string]] : []),
       ['Highest level', `${s.highestLevel} · ${levelTitle(this.cfg.progression, s.highestLevel)}`],
+      ['Overdrives', fmt(s.odActivations)],
+      ['Best Overdrive', s.odBestScore ? fmt(s.odBestScore) : '–'],
+      ['Largest Overdrive clear', s.odMaxLines ? `${s.odMaxLines} line${s.odMaxLines === 1 ? '' : 's'}` : '–'],
+      ['Free rotations used', fmt(s.odFreeRotations)],
+      ['Perfect clears', fmt(s.perfectClears)],
+      ['Combos protected', fmt(s.comboProtected)],
+      ['Daily completed', fmt(s.dailyCompleted)],
+      ['Current streak', `${streaks(this.daily, this.today()).current}`],
+      ['Longest streak', fmt(s.longestStreak)],
+      ['Best daily', s.bestDaily ? fmt(s.bestDaily) : '–'],
       ['Lifetime points', fmt(s.lifetimePoints)],
       ['Materials unlocked', `${s.unlockedMaterials.length} / ${this.cfg.materials.length}`],
       ['Games played', fmt(s.gamesPlayed)],
@@ -903,10 +1414,13 @@ export class App {
     r.cost = d.cost; r.energyPerLine = d.energyPerLine;
     this.cfg.generation.pulseChance = d.pulseChance;
     // Advanced overrides replace whole sections; anything not overridden returns to the defaults.
-    for (const k of ['progression', 'difficulty', 'materials', 'scoring'] as const) {
+    for (const k of ADVANCED_KEYS) {
       (this.cfg as unknown as Record<string, unknown>)[k] = structuredClone(d.advanced[k] ?? DEFAULT_CONFIG[k]);
     }
     this.cfg.progression.levelUpEnergy = d.levelUpEnergy;
+    this.cfg.combo = { protection: d.protection };
+    this.cfg.overdrive = { ...this.cfg.overdrive, duration: d.odDuration, multiplier: d.odMultiplier, rotation: d.odRotation };
+    if (this.view) this.syncViewConfig();
     setVisualParams(d.visuals);
     if (this.view) {
       this.view.animator.speed = d.clearMs / 340;
@@ -962,8 +1476,25 @@ export class App {
     range('devEdge', d.visuals.edge, d.visuals.edge.toFixed(1));
     range('devGlow', d.visuals.pulseGlow, d.visuals.pulseGlow.toFixed(1));
     range('devWave', d.visuals.wave, d.visuals.wave.toFixed(1));
+    const v = { ...DEFAULT_VISUALS, ...d.visuals };
+    range('devDepth', v.depth, v.depth.toFixed(1));
+    range('devShadow', v.shadow, v.shadow.toFixed(1));
+    range('devBoardLight', v.boardLight, v.boardLight.toFixed(1));
+    range('devOdLight', v.odLight, v.odLight.toFixed(1));
+    $<HTMLSelectElement>('devProtect').value = String(d.protection);
+    $<HTMLSelectElement>('devOdDur').value = String(d.odDuration);
+    $<HTMLSelectElement>('devOdMult').value = String(d.odMultiplier);
+    $<HTMLSelectElement>('devOdRot').value = d.odRotation;
+    $<HTMLSelectElement>('devRuleset').value = String(d.ruleset);
+    $<HTMLInputElement>('devDailyLimit').value = String(d.dailyLimit);
+    $<HTMLInputElement>('devDailyDate').value = d.dailyDate;
+    const st = this.session.state;
+    $<HTMLInputElement>('devSetScore').value = String(st.score);
+    $<HTMLInputElement>('devSetLevel').value = String(st.level ?? 1);
+    $<HTMLInputElement>('devSetEnergy').value = String(st.energy);
+    $<HTMLInputElement>('devSetOd').value = String(Math.round(st.od?.charge ?? 0));
     const c = this.cfg;
-    $<HTMLTextAreaElement>('devJson').value = JSON.stringify({ progression: c.progression, difficulty: c.difficulty, materials: c.materials, scoring: c.scoring }, null, 1);
+    $<HTMLTextAreaElement>('devJson').value = JSON.stringify({ progression: c.progression, difficulty: c.difficulty, materials: c.materials, scoring: c.scoring, overdrive: c.overdrive, daily: c.daily }, null, 1);
   }
 
   private bindDev() {
@@ -997,6 +1528,73 @@ export class App {
     const vis = (k: keyof VisualParams) => (v: number) => { this.dev.visuals = { ...this.dev.visuals, [k]: v }; };
     slide('devBright', vis('brightness')); slide('devRefl', vis('reflectivity')); slide('devEdge', vis('edge'));
     slide('devGlow', vis('pulseGlow')); slide('devWave', vis('wave'));
+    slide('devDepth', vis('depth')); slide('devShadow', vis('shadow')); slide('devBoardLight', (n) => { vis('boardLight')(n); this.view.resize(); });
+    slide('devOdLight', vis('odLight'));
+    const pick = <K extends keyof DevConfig>(id: string, key: K, parse: (v: string) => DevConfig[K]) => $<HTMLSelectElement>(id).addEventListener('change', (e) => {
+      this.dev = { ...this.dev, [key]: parse((e.target as HTMLSelectElement).value) };
+      this.saveDev(); this.setupDev(); this.updateOverdriveHud(); this.setCombo(this.session.state.combo, false);
+    });
+    pick('devProtect', 'protection', Number); pick('devOdDur', 'odDuration', Number); pick('devOdMult', 'odMultiplier', Number);
+    pick('devOdRot', 'odRotation', (v) => v as OverdriveRotation); pick('devRuleset', 'ruleset', Number);
+    $<HTMLInputElement>('devDailyLimit').addEventListener('change', (e) => {
+      this.dev.dailyLimit = Math.max(5, Math.min(60, Math.round(Number((e.target as HTMLInputElement).value) || 30))); this.saveDev(); this.setupDev();
+    });
+    $<HTMLInputElement>('devDailyDate').addEventListener('change', (e) => {
+      this.dev.dailyDate = (e.target as HTMLInputElement).value; this.saveDev();
+      this.toast(this.dev.dailyDate ? `Daily date simulated: ${this.dev.dailyDate}` : 'Daily date: today (UTC)');
+    });
+    const tap = (id: string, fn: () => void) => $(id).addEventListener('click', fn);
+    // Testing: change the running game directly (marked as a developer game, never submitted).
+    const edit = (fn: (st: GameState) => GameState) => {
+      if (this.screen !== 'game' || this.session.state.mode === 'tutorial') { this.toast('Start a game first'); return; }
+      const next = { ...fn(this.session.state), dev: true };
+      next.over = stateIsOver(next, this.cfg);
+      this.session.state = next;
+      this.displayedScore = next.score; this.displayedLevel = next.level ?? 1;
+      this.applyMaterial(this.displayedLevel);
+      this.updateHud(true); this.updateOverdriveHud(); this.refreshRotateButtons(); this.persist(); this.wake();
+    };
+    const val = (id: string) => Number($<HTMLInputElement>(id).value) || 0;
+    tap('devApplyScore', () => edit((st) => ({ ...st, score: Math.max(0, Math.round(val('devSetScore'))), level: st.mode === 'classic' ? Math.max(st.level ?? 1, levelForScore(this.rules(st).progression, val('devSetScore'))) : st.level })));
+    tap('devApplyLevel', () => edit((st) => { const L = Math.max(1, Math.round(val('devSetLevel'))); return { ...st, level: L, score: Math.max(st.score, levelThreshold(this.rules(st).progression, L)) }; }));
+    tap('devApplyEnergy', () => edit((st) => ({ ...st, energy: Math.max(0, Math.min(this.cfg.rotation.maxCharges, Math.round(val('devSetEnergy')))) })));
+    tap('devApplyOd', () => edit((st) => ({ ...st, od: { ...(st.od ?? { charge: 0, active: 0, freeLeft: 0, score: 0 }), charge: Math.max(0, Math.min(100, val('devSetOd'))), active: 0 } })));
+    tap('devActivateOd', () => {
+      this.overlayReturn = null; this.closeOverlay(); this.closeOverlay();
+      if (this.screen !== 'game' || this.session.state.mode === 'tutorial') this.startClassic();
+      edit((st) => ({ ...st, od: { ...(st.od ?? { charge: 0, active: 0, freeLeft: 0, score: 0 }), charge: 100, active: 0 } }));
+      this.activateOverdrive();
+    });
+    tap('devPieces', () => {
+      // Loads today's Daily piece order into a Classic test game, to inspect the sequence.
+      const ch = dailyChallenge(this.today(), this.cfg);
+      this.overlayReturn = null; this.closeOverlay(); this.closeOverlay();
+      const st: GameState = { ...dailyGame(ch, this.cfg), mode: 'classic', daily: undefined, dev: true };
+      this.startClassic(st);
+      this.toast(`Daily ${ch.id} sequence: ${ch.sequence.slice(0, 9).map((p) => p.defId).join(', ')}…`, 'tip');
+    });
+    tap('devValidate', () => {
+      const t0 = performance.now();
+      const out: string[] = [];
+      let ok = 0, retried = 0, total = 0;
+      for (let i = 0; i < 30; i++) {
+        const id = addDays(this.today(), i);
+        const ch = dailyChallenge(id, this.cfg);
+        const rep = validateChallenge(ch, this.cfg);
+        if (rep.ok) ok++;
+        if (ch.attempt > 0) retried++;
+        total += rep.botScore;
+        if (i < 5) out.push(`${id}: bot ${fmt(rep.botScore)} in ${rep.botPlacements} placements${ch.attempt ? ` (attempt ${ch.attempt + 1})` : ''}`);
+      }
+      const first = validateChallenge(generateChallenge(this.today(), this.cfg, 0), this.cfg);
+      this.toast(`${ok}/30 valid, ${retried} regenerated, bot average ${fmt(Math.round(total / 30))}. ${Math.round(performance.now() - t0)} ms. Today: ${first.ok ? 'first attempt valid' : first.problems.join('; ')}`, 'tip');
+      console.info('[BLOQ] Daily validation', out);
+    });
+    tap('devTestAch', () => {
+      const pending = ACHIEVEMENTS.filter((a) => !this.stats.achievements[a.id]);
+      const a = pending[0] ?? ACHIEVEMENTS[0];
+      this.toast(`Achievement: ${a.name}`, 'achv'); sfx.achievement(); haptic('unlock');
+    });
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', fn);
     on('devJsonApply', () => {
       try {
@@ -1016,6 +1614,14 @@ export class App {
           adv.materials = j.materials;
         }
         if (j.scoring) adv.scoring = { ...DEFAULT_CONFIG.scoring, ...j.scoring };
+        if (j.overdrive) {
+          const o = { ...DEFAULT_CONFIG.overdrive, ...j.overdrive };
+          if (!Array.isArray(o.chargeLines) || o.chargeLines.some((x: number) => !(x >= 0))) throw new Error('overdrive.chargeLines must be numbers ≥ 0');
+          if (!(o.duration >= 1) || !(o.multiplier >= 1)) throw new Error('overdrive duration and multiplier must be ≥ 1');
+          adv.overdrive = o;
+          this.dev.odDuration = o.duration; this.dev.odMultiplier = o.multiplier; this.dev.odRotation = o.rotation;
+        }
+        if (j.daily) adv.daily = { ...DEFAULT_CONFIG.daily, ...j.daily };
         // Keep only the sections that differ from the defaults.
         for (const k of Object.keys(adv) as (keyof typeof adv)[]) if (JSON.stringify(adv[k]) === JSON.stringify(DEFAULT_CONFIG[k])) delete adv[k];
         this.dev.advanced = adv;
@@ -1031,7 +1637,11 @@ export class App {
       const sc = SCENARIOS[Number($<HTMLSelectElement>('devScenario').value)];
       if (sc.career) { this.stats = { ...this.stats, ...structuredClone(sc.career) }; store(KEYS.stats, JSON.stringify(this.stats)); }
       const base = newGame(newSeed(), this.cfg, { board: boardFromArt(sc.board), energy: sc.energy, score: sc.score });
-      const state: GameState = { ...base, tray: sc.tray.map((p) => (p ? { ...p } : null)), energy: sc.energy, combo: sc.combo ?? 0 };
+      const state: GameState = {
+        ...base, tray: sc.tray.map((p) => (p ? { ...p } : null)), energy: sc.energy, combo: sc.combo ?? 0, dev: true,
+        shield: sc.shield ?? (sc.combo ? this.cfg.combo.protection : 0),
+        od: sc.od ? { charge: sc.od.charge, active: sc.od.active ?? 0, freeLeft: this.cfg.overdrive.limitedFree, score: 0 } : base.od,
+      };
       state.over = stateIsOver(state, this.cfg);
       this.overlayReturn = null;
       this.closeOverlay(); this.closeOverlay();
@@ -1059,6 +1669,7 @@ export class App {
       remove(DEV_KEY);
       this.dev = defaultDev(); this.applyDev(); this.setupDev();
       this.stats = parseStats(null);
+      this.daily = parseDailyRecords(null); this.gcQueue = [];
       this.toast('Local data reset');
     });
   }
@@ -1070,6 +1681,20 @@ export class App {
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());
     on('btnStats', () => { this.renderStats(); this.statsTab('stats'); this.openOverlay('stats'); });
+    on('btnAchievements', () => { this.renderStats(); this.statsTab('ach'); this.openOverlay('stats'); });
+    on('btnRankings', () => this.openRankings());
+    on('btnDaily', () => this.openDailyHub());
+    on('btnDailyStart', () => this.startDaily());
+    on('calPrev', () => this.shiftMonth(-1));
+    on('calNext', () => this.shiftMonth(1));
+    on('btnOverdrive', () => this.activateOverdrive());
+    on('btnResDaily', () => { this.closeOverlay(); this.show('home'); this.openDailyHub(); });
+    on('btnDailyAgain', () => { this.closeOverlay(); this.startDaily(); });
+    on('btnDrRank', () => { this.overlayReturn = 'dailyResults'; this.openRankings('daily'); });
+    on('btnDrShare', () => this.shareDaily());
+    on('btnDrHome', () => { this.closeOverlay(); this.show('home'); });
+    on('btnGameCenter', () => openDashboard(this.rankBoard));
+    document.querySelectorAll<HTMLButtonElement>('#rankings .seg-btn').forEach((b) => b.addEventListener('click', () => this.openRankings(b.dataset.board as LeaderboardKey)));
     on('tabStats', () => this.statsTab('stats'));
     on('tabAch', () => this.statsTab('ach'));
     on('btnMaterials', () => { this.renderMaterials(); this.openOverlay('materials'); });
@@ -1083,9 +1708,10 @@ export class App {
     on('btnRestart', () => {
       this.closeOverlay();
       if (this.session.state.mode === 'tutorial') { this.startTutorial(); return; }
-      this.abandon(this.session.state.score);
-      track('game_restarted');
-      this.startClassic();
+      const daily = this.session.state.mode === 'daily';
+      this.abandon({ state: this.session.state });
+      track('game_restarted', { mode: this.session.state.mode });
+      if (daily) this.startDaily(); else this.startClassic();
     });
     on('btnPauseSettings', () => { this.overlayReturn = 'pause'; this.setupDev(); this.openOverlay('settings'); });
     on('btnPauseHome', () => {
@@ -1120,6 +1746,14 @@ export class App {
     toggle('setHaptics', 'haptics');
     toggle('setMotion', 'reducedMotion');
     toggle('setContrast', 'highContrast');
+    toggle('setMusic', 'music');
+    const vol = (id: string, key: 'sfxVolume' | 'musicVolume') => $<HTMLInputElement>(id).addEventListener('input', (e) => {
+      this.settings = { ...this.settings, [key]: Number((e.target as HTMLInputElement).value) };
+      saveSettings(this.settings);
+      this.applySettings();
+    });
+    vol('setSfxVol', 'sfxVolume'); vol('setMusicVol', 'musicVolume');
+    $<HTMLInputElement>('setSfxVol').addEventListener('change', () => { unlockAudio(); sfx.select(); });
 
     if (!__RELEASE__) {
       // Development builds: tap the version label five times to show the developer section.
@@ -1136,9 +1770,18 @@ export class App {
 
   private async share() {
     if (!this.lastResultInfo) return;
-    track('share_selected', { level: this.lastResultInfo.level, message: this.lastResultInfo.message });
+    track('share_selected', { mode: 'classic', level: this.lastResultInfo.level, message: this.lastResultInfo.message });
     const card = renderShareCard(this.lastResultInfo);
     const outcome = await shareImage(card, `I scored ${fmt(this.lastResultInfo.score)} in BLOQ and reached Level ${this.lastResultInfo.level}. ${this.lastResultInfo.message}`);
+    if (outcome === 'downloaded') this.toast('Result image saved');
+  }
+
+  private async shareDaily() {
+    const info = this.lastDailyInfo;
+    if (!info) return;
+    track('share_selected', { mode: 'daily', day: info.day, message: info.message, rank: info.rank ?? 0 });
+    const card = renderDailyShareCard(info);
+    const outcome = await shareImage(card, `I scored ${fmt(info.score)} in today's BLOQ Daily Challenge (${dayLabel(info.day)}). ${info.message}`);
     if (outcome === 'downloaded') this.toast('Result image saved');
   }
 

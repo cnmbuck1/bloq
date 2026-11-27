@@ -1,90 +1,71 @@
-// Balancing simulation: a greedy bot plays many seeded games through the real engine, once per rotation mode.
-// Skipped in normal test runs. Run with:  SIM=1 npx vitest run tools/simulate.spec.ts
+// Balancing simulation: a greedy bot plays seeded Classic games through the real engine.
+// Build 4 compares one variable at a time against the default configuration (spec section 38).
+// Skipped in normal test runs. Run with:  SIM=1 npx vitest run tools/simulate.spec.ts   (SIM_GAMES=300 by default)
 import { writeFileSync } from 'node:fs';
 import { describe, it } from 'vitest';
-import { canPlace, findCompletedLines, placePiece, shapeOf } from '../src/engine/board';
-import { DEFAULT_CONFIG, type GameConfig, type RotationMode } from '../src/engine/config';
-import { applyMove, newGame, rotatePiece, type GameState } from '../src/engine/game';
-import { reachableOrientations } from '../src/engine/rotation';
+import { DEFAULT_CONFIG, type GameConfig } from '../src/engine/config';
+import { newGame } from '../src/engine/game';
+import { addDays, dailyChallenge, dailyGame } from '../src/engine/daily';
+import { playGreedy } from '../src/engine/sim';
 
-interface Plan { slot: number; turns: number; r: number; c: number; v: number }
+const avg = (a: number[]) => (a.length ? Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10 : 0);
+const pct = (n: number, d: number) => `${Math.round((n / Math.max(1, d)) * 1000) / 10}%`;
 
-/**
- * Greedy over every affordable orientation: prefer moves that clear the most lines, then keep the board compact.
- * Energy is worth keeping, so a rotation must earn its cost (a small penalty per charge spent).
- */
-function bestMove(s: GameState, cfg: GameConfig): Plan | null {
-  let best: Plan | null = null;
-  s.tray.forEach((p, slot) => {
-    if (!p) return;
-    reachableOrientations(cfg.rotation, p, s.energy).forEach((o, turns) => {
-      const shape = shapeOf(o.inst);
-      for (let r = 0; r <= 8 - shape.rows; r++) for (let c = 0; c <= 8 - shape.cols; c++) {
-        if (!canPlace(s.board, shape, r, c)) continue;
-        const { board } = placePiece(s.board, o.inst, r, c);
-        const { rows, cols } = findCompletedLines(board);
-        let pulseBonus = 0;
-        for (const k of [...rows.flatMap((rr) => [...Array(8)].map((_, i) => rr * 8 + i)), ...cols.flatMap((cc) => [...Array(8)].map((_, i) => i * 8 + cc))]) if (board.cells[k]?.pulse) pulseBonus += 1;
-        const v = (rows.length + cols.length) * 100 + pulseBonus * 30 + r * 2 - Math.abs(c - 3.5) + shape.cells.length - o.spent * 12;
-        if (!best || v > best.v) best = { slot, turns, r, c, v };
-      }
-    });
-  });
-  return best;
-}
-
-function runMode(mode: RotationMode, N: number) {
-  // SIM_ROT='{"maxCharges":2,"startCharges":2}' tries other Rotation Energy settings.
-  const extra = process.env.SIM_ROT ? JSON.parse(process.env.SIM_ROT) : {};
-  const cfg: GameConfig = { ...DEFAULT_CONFIG, rotation: { ...DEFAULT_CONFIG.rotation, ...extra, mode } };
-  const scores: number[] = [], moves: number[] = [], chains: number[] = [], pulses: number[] = [], rotations: number[] = [];
-  const levels: number[] = [], levelEnergy: number[] = [];
-  let starvedTurns = 0, totalTurns = 0, savedByLevelEnergy = 0;
-  const chainHist = new Map<number, number>();
+function run(name: string, cfg: GameConfig, N: number) {
+  const scores: number[] = [], moves: number[] = [], levels: number[] = [], ods: number[] = [], firstOd: number[] = [];
+  const lvl2: number[] = [], perfects: number[] = [], protectedMoves: number[] = [], rotations: number[] = [];
   for (let seed = 1; seed <= N; seed++) {
-    let s = newGame(seed, cfg);
-    while (!s.over && s.stats.moves < 2000) {
-      const m = bestMove(s, cfg);
-      if (!m) break;
-      totalTurns++;
-      if (mode === 'energy' && s.energy === 0) starvedTurns++;
-      for (let t = 0; t < m.turns; t++) {
-        const ro = rotatePiece(s, m.slot, cfg);
-        if (!ro.ok) throw new Error(`rotation refused: ${ro.reason}`);
-        s = ro.state;
-      }
-      const o = applyMove(s, m.slot, m.r, m.c, cfg);
-      if (!o.ok) break;
-      if (o.result.levelAfter > o.result.levelBefore && o.result.levelEnergy > 0 && !o.state.over) {
-        // Would this move have ended the game without the level-up energy?
-        const noLu = applyMove(s, m.slot, m.r, m.c, { ...cfg, progression: { ...cfg.progression, levelUpEnergy: 'none' } });
-        if (noLu.ok && noLu.state.over) savedByLevelEnergy++;
-      }
-      if (o.result.chain) chainHist.set(o.result.chain, (chainHist.get(o.result.chain) ?? 0) + 1);
-      s = o.state;
-    }
-    scores.push(s.score); moves.push(s.stats.moves); chains.push(s.stats.maxChain); pulses.push(s.stats.pulsesActivated); rotations.push(s.stats.rotations);
-    levels.push(s.level); levelEnergy.push(s.stats.energyFromLevels ?? 0);
+    const r = playGreedy(newGame(seed, cfg), cfg, { overdrive: 'eager' });
+    const s = r.state;
+    scores.push(s.score); moves.push(r.placements); levels.push(s.level); ods.push(r.overdrives);
+    if (r.firstOverdriveMove >= 0) firstOd.push(r.firstOverdriveMove);
+    const l2 = r.results.findIndex((x) => x.levelAfter >= 2);
+    if (l2 >= 0) lvl2.push(l2 + 1);
+    perfects.push(s.stats.perfectClears); protectedMoves.push(s.stats.comboProtected); rotations.push(s.stats.rotations);
   }
-  const reach = (L: number) => Math.round((levels.filter((l) => l >= L).length / N) * 1000) / 10 + '%';
   const sorted = [...scores].sort((a, b) => a - b);
-  const avg = (a: number[]) => Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10;
+  const reach = (L: number) => pct(levels.filter((l) => l >= L).length, N);
   return {
-    mode, games: N, avgScore: avg(scores), medianScore: sorted[N >> 1], p10: sorted[Math.floor(N * 0.1)], p90: sorted[Math.floor(N * 0.9)],
-    avgMoves: avg(moves), avgRotations: avg(rotations), rotationsPerMove: Math.round((avg(rotations) / avg(moves)) * 1000) / 1000,
-    turnsAtZeroEnergy: mode === 'energy' ? Math.round((starvedTurns / totalTurns) * 1000) / 10 + '%' : 'n/a',
-    avgPulsesActivated: avg(pulses), gamesWithChain2plus: chains.filter((c) => c >= 2).length,
-    avgLevel: avg(levels), maxLevel: Math.max(...levels),
-    reachedLevel: { L2: reach(2), L3: reach(3), L5: reach(5), L7: reach(7), L9: reach(9), L10: reach(10), L11: reach(11) },
-    avgEnergyFromLevels: avg(levelEnergy), gamesSavedByLevelEnergy: savedByLevelEnergy,
-    chainEvents: Object.fromEntries([...chainHist].sort((a, b) => a[0] - b[0])),
+    name, games: N, avgScore: avg(scores), medianScore: sorted[N >> 1], p10: sorted[Math.floor(N * 0.1)], p90: sorted[Math.floor(N * 0.9)],
+    avgPlacements: avg(moves), medianPlacements: [...moves].sort((a, b) => a - b)[N >> 1],
+    avgLevel: avg(levels), reach: { L2: reach(2), L3: reach(3), L5: reach(5), L7: reach(7), L10: reach(10) },
+    placementsToLevel2: avg(lvl2),
+    gamesWithOverdrive: pct(ods.filter((o) => o > 0).length, N), overdrivesPerGame: avg(ods), placementsToFirstOverdrive: avg(firstOd),
+    perfectClearsPerGame: avg(perfects), protectedMovesPerGame: avg(protectedMoves), rotationsPerGame: avg(rotations),
   };
 }
 
+const V = (patch: (c: GameConfig) => void): GameConfig => { const c = structuredClone(DEFAULT_CONFIG); patch(c); return c; };
+
 describe.runIf(process.env.SIM)('balancing simulation', () => {
-  it('plays 300 games per rotation mode', () => {
+  it('compares one variable at a time', () => {
     const N = Number(process.env.SIM_GAMES ?? 300);
-    const out = (['none', 'energy', 'unlimited'] as RotationMode[]).map((m) => runMode(m, N));
-    writeFileSync(process.env.SIM_OUT ?? 'sim-results.json', JSON.stringify(out, null, 1));
-  }, 600_000);
+    const variants: [string, GameConfig][] = [
+      ['default (OD 5 moves ×2 free turns, protection 1, level-up full, Pulse 12%)', DEFAULT_CONFIG],
+      ['no Overdrive', V((c) => { c.overdrive.enabled = false; })],
+      ['combo protection off', V((c) => { c.combo.protection = 0; })],
+      ['combo protection 2', V((c) => { c.combo.protection = 2; })],
+      ['Overdrive 3 moves', V((c) => { c.overdrive.duration = 3; })],
+      ['Overdrive 7 moves', V((c) => { c.overdrive.duration = 7; })],
+      ['Overdrive ×1.5', V((c) => { c.overdrive.multiplier = 1.5; })],
+      ['Overdrive ×2.5', V((c) => { c.overdrive.multiplier = 2.5; })],
+      ['Overdrive no rotation benefit', V((c) => { c.overdrive.rotation = 'none'; })],
+      ['level-up energy one', V((c) => { c.progression.levelUpEnergy = 'one'; })],
+      ['level-up energy none', V((c) => { c.progression.levelUpEnergy = 'none'; })],
+      ['Pulse 15%', V((c) => { c.generation.pulseChance = 0.15; })],
+    ];
+    const classic = variants.map(([n, c]) => run(n, c, N));
+    // Daily: 60 consecutive challenges, greedy bot.
+    const daily = [...Array(60)].map((_, i) => {
+      const ch = dailyChallenge(addDays('2026-11-27', i));
+      const r = playGreedy(dailyGame(ch), DEFAULT_CONFIG, { maxMoves: ch.placementLimit });
+      return { id: ch.id, score: r.state.score, placements: r.placements, overdrives: r.overdrives };
+    });
+    const dailySummary = {
+      challenges: daily.length, avgScore: avg(daily.map((d) => d.score)), minScore: Math.min(...daily.map((d) => d.score)),
+      maxScore: Math.max(...daily.map((d) => d.score)), finishedAll30: daily.filter((d) => d.placements >= 30).length,
+      avgPlacements: avg(daily.map((d) => d.placements)), avgOverdrives: avg(daily.map((d) => d.overdrives)),
+    };
+    writeFileSync(process.env.SIM_OUT ?? 'sim-results.json', JSON.stringify({ classic, daily: dailySummary }, null, 1));
+  }, 1_800_000);
 });
