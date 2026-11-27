@@ -10,6 +10,16 @@ PALETTE = {
   'violet':  ((0.55, 0.20, 0.95), (0.80, 0.60, 1.0)),   # amethyst
   'green':   ((0.08, 0.85, 0.35), (0.55, 1.0, 0.70)),   # emerald
   'blue':    ((0.12, 0.35, 1.00), (0.55, 0.70, 1.0)),   # sapphire
+  # Build 8 gemstone set
+  'ruby':     ((1.00, 0.04, 0.12), (1.0, 0.45, 0.5)),
+  'pink':     ((0.95, 0.03, 0.64), (1.0, 0.45, 0.85)),   # pink sapphire
+  'sapphire': ((0.06, 0.22, 1.00), (0.5, 0.65, 1.0)),    # royal sapphire
+  'aqua':     ((0.10, 0.80, 0.95), (0.6, 1.0, 1.0)),     # aquamarine (Pulse)
+  'emerald':  ((0.03, 0.80, 0.38), (0.5, 1.0, 0.7)),
+  'amethyst': ((0.52, 0.16, 0.98), (0.80, 0.60, 1.0)),
+  'amber':    ((1.00, 0.42, 0.03), (1.0, 0.75, 0.4)),    # amber / citrine
+  'topaz':    ((1.00, 0.70, 0.02), (1.0, 0.92, 0.5)),    # golden topaz
+  'diamond':  ((0.78, 0.88, 1.00), (0.9, 0.95, 1.0)),    # platinum material
 }
 
 def reset():
@@ -64,7 +74,7 @@ def glass_mat(name, col, glow, pulse=False, od=0.0):
   vol.inputs['Density'].default_value = 0.0
   vol.inputs['Absorption Color'].default_value = (*col, 1)
   # thickness-dependent saturation: absorption via a separate node
-  ab = N.new('ShaderNodeVolumeAbsorption'); ab.inputs['Color'].default_value = (*col, 1); ab.inputs['Density'].default_value = 1.7
+  ab = N.new('ShaderNodeVolumeAbsorption'); ab.inputs['Color'].default_value = (*col, 1); ab.inputs['Density'].default_value = DENS
   em = N.new('ShaderNodeEmission'); em.inputs['Color'].default_value = (*glow, 1); em.inputs['Strength'].default_value = 0.0
   add = N.new('ShaderNodeAddShader')
   # internal energy: a faint volume emission (the crystal is lit from within)
@@ -75,10 +85,16 @@ def glass_mat(name, col, glow, pulse=False, od=0.0):
   L.new(add.outputs[0], out.inputs['Volume'])
   return m
 
-def crystal_mesh(half=0.44, h=0.46, cut='princess'):
+def CROWN(half, h):
+  # table, two crown steps (pronounced bevel), then a tall girdle wall (perceived thickness)
+  return [(half - 0.15, h), (half - 0.07, h - 0.05), (half - 0.012, h - 0.115), (half, h - 0.14), (half, 0.32)]
+BEVW = 0.012
+DENS = 2.6
+
+def crystal_mesh(half=0.44, h=0.56, cut='princess'):
   """Square brilliant: table, two crown steps, vertical girdle walls, and a faceted pavilion (square -> diamond ->
   culet) whose steep facets return the light through the table by total internal reflection."""
-  crown = [(half - 0.13, h), (half - 0.055, h - 0.035), (half, h - 0.085), (half, 0.30)]
+  crown = CROWN(half, h)
   bm = bmesh.new()
   sq = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
   loops = [[bm.verts.new((x * r, y * r, z)) for (x, y) in sq] for (r, z) in crown]
@@ -88,7 +104,7 @@ def crystal_mesh(half=0.44, h=0.46, cut='princess'):
   bm.faces.new(loops[0][::-1])
   G = loops[-1]
   mid = [((sq[k][0] + sq[(k + 1) % 4][0]) / 2, (sq[k][1] + sq[(k + 1) % 4][1]) / 2) for k in range(4)]
-  D = [bm.verts.new((x * half * 0.62, y * half * 0.62, 0.14)) for (x, y) in mid]
+  D = [bm.verts.new((x * half * 0.62, y * half * 0.62, 0.15)) for (x, y) in mid]
   apex = bm.verts.new((0, 0, 0.0))
   for k in range(4):
     bm.faces.new((G[k], G[(k + 1) % 4], D[k][::1] if False else D[k]))
@@ -97,10 +113,10 @@ def crystal_mesh(half=0.44, h=0.46, cut='princess'):
   bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
   me = bpy.data.meshes.new('crystal'); bm.to_mesh(me); bm.free()
   o = bpy.data.objects.new('crystal', me); bpy.context.collection.objects.link(o)
-  b2 = o.modifiers.new('round', 'BEVEL'); b2.width = 0.006; b2.segments = 2; b2.limit_method = 'ANGLE'; b2.angle_limit = math.radians(10)
+  b2 = o.modifiers.new('round', 'BEVEL'); b2.width = BEVW; b2.segments = 3; b2.limit_method = 'ANGLE'; b2.angle_limit = math.radians(10)
   return o
 
-def core(scale=0.12, z=0.2, strength=9.0, col=(0.7, 1, 1)):
+def core(scale=0.12, z=0.2, strength=6.0, col=(0.7, 1, 1)):
   bm = bmesh.new()
   pts = [(0,0,1),(0,0,-1),(1,0,0),(-1,0,0),(0,1,0),(0,-1,0)]
   vs = [bm.verts.new(p) for p in pts]
@@ -138,7 +154,8 @@ def floor(catcher=True, col=(0.012, 0.016, 0.024), size=20, z=0.0):
   o.data.materials.append(m)
   return o
 
-def camera(sc, ortho, tilt_deg=9.0, target=(0, 0, 0.0)):
+def camera(sc, ortho, tilt_deg=None, target=(0, 0, 0.0)):
+  if tilt_deg is None: tilt_deg = TILT
   cd = bpy.data.cameras.new('cam'); cd.type = 'ORTHO'; cd.ortho_scale = ortho
   o = bpy.data.objects.new('cam', cd); bpy.context.collection.objects.link(o); sc.camera = o
   t = math.radians(tilt_deg)
@@ -240,8 +257,62 @@ def place(r, c, color, pulse=False, n=8, od=0.0):
   if pulse:
     k = core(); k.location = (x, y, -DEPTH + 0.2)
 
+def sun(name, direction_from, strength, angle_deg=6, color=(1,1,1)):
+  d = bpy.data.lights.new(name, 'SUN'); d.energy = strength * LMUL.get(name, 1.0); d.angle = math.radians(angle_deg); d.color = color
+  o = bpy.data.objects.new(name, d); bpy.context.collection.objects.link(o)
+  o.rotation_euler = (-Vector(direction_from)).to_track_quat('-Z', 'Y').to_euler()
+
+def tile_scene(job):
+  """Build 8: one machined compartment, rendered straight down at exactly one cell pitch so it tiles seamlessly
+  (a 3x3 block of compartments is modelled; the camera sees only the centre one plus half of each web)."""
+  top, bot, depth, edge = job.get('top', 0.90), job.get('bot', 0.80), job.get('depth', 0.16), job.get('edge', 0.025)
+  # built directly (no booleans): for each cell, the web top (pitch square -> opening), a 45-degree chamfer,
+  # tapered walls and the floor; the four faces of each ring are separate so materials can be assigned by role
+  ch = job.get('chamfer', 0.014); a, b = top / 2, bot / 2
+  bm = bmesh.new()
+  SQ = [(-1,-1),(1,-1),(1,1),(-1,1)]
+  roles = []
+  for i in (-1, 0, 1):
+    for j in (-1, 0, 1):
+      ring = lambda r, z: [bm.verts.new((i + x * r, j + y * r, z)) for (x, y) in SQ]
+      R0 = ring(0.5, 0.0); R1 = ring(a + ch, 0.0); R2 = ring(a, -ch); R3 = ring(b, -depth)
+      for (L1, L2, role) in ((R0, R1, 0), (R1, R2, 3), (R2, R3, 1)):
+        for k in range(4):
+          bm.faces.new((L1[k], L1[(k+1)%4], L2[(k+1)%4], L2[k])); roles.append(role)
+      bm.faces.new(R3); roles.append(2)
+  bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-5)
+  bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+  me = bpy.data.meshes.new('tile'); bm.to_mesh(me); bm.free()
+  slab = bpy.data.objects.new('tile', me); bpy.context.collection.objects.link(slab)
+  for poly in me.polygons:
+    if poly.normal.z < 0: pass
+  if job.get('round', 0):
+    bvm = slab.modifiers.new('r', 'BEVEL'); bvm.width = job['round']; bvm.segments = 3; bvm.limit_method = 'ANGLE'; bvm.angle_limit = math.radians(50)
+  # materials: frame web = gunmetal, walls = dark graphite, floor = graphite with a faint machined texture
+  def pbsdf(name, base, rough, metal=0.0, spec=0.3, noise=0.0):
+    m = bpy.data.materials.new(name); m.use_nodes = True
+    N = m.node_tree.nodes; L = m.node_tree.links; p = N['Principled BSDF']
+    p.inputs['Base Color'].default_value = (*base, 1); p.inputs['Roughness'].default_value = rough
+    p.inputs['Metallic'].default_value = metal; p.inputs['Specular IOR Level'].default_value = spec
+    if noise:
+      tc = N.new('ShaderNodeTexCoord'); nz = N.new('ShaderNodeTexNoise'); nz.inputs['Scale'].default_value = 90; nz.inputs['Detail'].default_value = 8
+      L.new(tc.outputs['Object'], nz.inputs['Vector'])
+      bp = N.new('ShaderNodeBump'); bp.inputs['Strength'].default_value = noise
+      L.new(nz.outputs['Fac'], bp.inputs['Height']); L.new(bp.outputs['Normal'], p.inputs['Normal'])
+    return m
+  slab.data.materials.append(pbsdf('web', tuple(job.get('webCol', (0.045, 0.05, 0.06))), job.get('webRough', 0.38), job.get('webMetal', 0.6), 0.5, 0.03))
+  slab.data.materials.append(pbsdf('wall', tuple(job.get('wallCol', (0.03, 0.034, 0.042))), 0.55, 0.3, 0.4))
+  slab.data.materials.append(pbsdf('floor', tuple(job.get('floorCol', (0.05, 0.055, 0.065))), job.get('floorRough', 0.7), 0.0, 0.25, 0.06))
+  slab.data.materials.append(pbsdf('lip', tuple(job.get('lipCol', (0.12, 0.13, 0.15))), 0.3, 0.8, 0.6))
+  for poly, role in zip(slab.data.polygons, roles): poly.material_index = {0: 0, 1: 1, 2: 2, 3: 3}[role]
+  # light: a soft sun from the upper left (the game's global light), a dim cool fill from the right, sky for occlusion
+  sun('sun', (-0.55, 0.65, 1.0), job.get('sun', 3.0), job.get('sunAngle', 12), (1.0, 0.97, 0.93))
+  sun('fill', (0.7, -0.4, 0.9), job.get('fill', 0.5), 30, (0.7, 0.85, 1.0))
+  w = bpy.context.scene.world; w.node_tree.nodes['Background'].inputs[0].default_value = tuple(job.get('sky', (0.03, 0.035, 0.045))) + (1,)
+
 job = json.load(open(sys.argv[-1]))
 LSCALE = job.get('light', 1.0)
+TILT = job.get('tilt', 9.0)
 LMUL = job.get('lights', {})
 sc = reset(); world(sc); studio()
 kind = job.get('kind', 'sprite')
@@ -253,6 +324,12 @@ if kind == 'sprite':
   f = floor(False); f.visible_camera = False  # seen only through the glass; the game draws its own contact shadow
   camera(sc, job.get('ortho', 1.3))
   render(sc, job['out'], (job['px'], job['px']), job.get('samples', 96))
+
+if kind == 'tile':
+  tile_scene(job)
+  sc.render.film_transparent = False
+  camera(sc, job.get('ortho', 1.0), tilt_deg=0, target=(0, 0, 0))
+  render(sc, job['out'], (job['px'], job['px']), job.get('samples', 64))
 
 if kind in ('board', 'cell'):
   board()

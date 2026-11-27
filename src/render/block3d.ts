@@ -13,7 +13,7 @@
 
 import * as THREE from 'three';
 
-export type BlockStyle = 'b4' | 'b5b' | 'b5c' | 'b6';
+export type BlockStyle = 'b4' | 'b5b' | 'b5c' | 'b6' | 'b8';
 export interface Look3D { color: string; highlight: string; shadow: string }
 
 /** Sprite padding as a fraction of the cell (room for the contact shadow); must match blocks.ts MARGIN. */

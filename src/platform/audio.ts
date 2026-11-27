@@ -171,6 +171,20 @@ export const sfx = {
     const shards = 3 + Math.min(lines, 4) * 2;
     for (let i = 0; i < shards; i++) tone(vary(2800 + Math.random() * 2600, 40), 0.03 + i * 0.018 + Math.random() * 0.01, 0.06 + Math.random() * 0.05, { type: 'sine', gain: 0.012 + 0.004 * Math.min(lines, 4) });
     noise(0.02, 0.09, 0.05, 7000, 4000, 2.5);
+    // Build 8: two or more lines add a crystalline cascade (rising glass chimes, one run per extra line, a little
+    // longer and higher for each); four or more end on a bright held shimmer.
+    if (lines >= 2) {
+      const steps = Math.min(4 + (lines - 2) * 3, 12);
+      for (let i = 0; i < steps; i++) {
+        const f = LADDER[Math.min(lift + 2 + i, LADDER.length - 1)] * 2;
+        tone(vary(f, 10), 0.09 + i * 0.045, 0.22, { type: 'sine', gain: 0.022 + 0.004 * Math.min(lines, 4) });
+        tone(vary(f * 2.76, 15), 0.09 + i * 0.045, 0.08, { type: 'sine', gain: 0.006 });
+      }
+      if (lines >= 4) {
+        const t0 = 0.1 + steps * 0.045;
+        [1, 1.5, 2].forEach((m, i) => tone(LADDER[6] * m, t0, 0.7, { type: 'sine', gain: 0.03 / (1 + i) }));
+      }
+    }
   },
   /** Focused electronic burst; each wave in a chain rises and thickens. */
   pulse(wave: number, count: number) {

@@ -5,13 +5,16 @@
 
 import { THEME, mix, rgba } from './theme';
 import { MARGIN_3D, available3D, renderBlock3D, type BlockStyle } from './block3d';
+import { GEM_RISE, GEM_SPAN, gemFor, gemImage, gemsReady, type GemKey } from './gems';
 
 export type { BlockStyle } from './block3d';
-let style: BlockStyle = 'b6';
+let style: BlockStyle = 'b8';
 /** Build 5 graphics selector: Build 4 canvas blocks, 5B anodized metal or 5C crystal-metal (3D rendered sprites). */
 export function setBlockStyle(s: BlockStyle) { if (s !== style) { style = s; cache.clear(); } }
 /** The style actually drawn (falls back to Build 4 when WebGL is unavailable). */
-export const blockStyle = (): BlockStyle => (style === 'b6' ? 'b6' : style !== 'b4' && available3D() ? style : 'b4');
+export const blockStyle = (): BlockStyle => (style === 'b8' ? (gemsReady() ? 'b8' : 'b6') : style === 'b6' ? 'b6' : style !== 'b4' && available3D() ? style : 'b4');
+/** Build 8: the board and crystals use the pre-rendered gemstone assets. */
+export const isGemStyle = () => blockStyle() === 'b8';
 
 /** What the renderer needs from a material (see config.materials). */
 export interface MaterialLook { id: string; color: string; highlight: string; shadow: string }
@@ -190,8 +193,8 @@ function paintPulseBody(g: CanvasRenderingContext2D, full: number) {
 
 function sprite(size: number, pulse: boolean, mat: MaterialLook, od = false): HTMLCanvasElement {
   const st = blockStyle();
-  const odv = od && (st === 'b5c' || st === 'b6');
-  const key = `${st}|${Math.round(size * 4)}|${pulse ? 'P' : mat.id + mat.color}|${highContrast ? 1 : 0}|${odv ? 'od' : ''}`;
+  const odv = od && (st === 'b5c' || st === 'b6' || st === 'b8');
+  const key = `${st}|${gemsReady() ? 'g' : ''}|${Math.round(size * 4)}|${pulse ? 'P' : mat.id + mat.color}|${highContrast ? 1 : 0}|${odv ? 'od' : ''}`;
   let c = cache.get(key);
   if (!c && (st === 'b5b' || st === 'b5c')) {
     const px = Math.ceil(size * (1 + MARGIN * 2) * dpr);
@@ -207,7 +210,8 @@ function sprite(size: number, pulse: boolean, mat: MaterialLook, od = false): HT
     const g = c.getContext('2d')!;
     g.scale(px / full, px / full);
     g.translate(m, m);
-    if (st === 'b6') paintCrystal6(g, size, pulse, mat, odv);
+    if (st === 'b8') paintGem8(g, size, pulse, mat, odv);
+    else if (st === 'b6') paintCrystal6(g, size, pulse, mat, odv);
     else if (pulse) paintPulseBody(g, size); else paintMetal(g, size, mat);
     cache.set(key, c);
   }
@@ -231,6 +235,85 @@ export interface BlockFx {
   under?: number;
   /** Build 6: unavailable piece (desaturated, dimmed; same material). */
   muted?: boolean;
+}
+
+/**
+ * Build 8 gemstone crystal. The pre-rendered gem is drawn so the stone fills 94% of the cell (it sits down inside
+ * the compartment, whose opening is a little wider and whose floor is a little narrower), over a soft contact shadow
+ * cast towards the lower right (the game's light comes from the upper left, the same as in the renders).
+ */
+function paintGem8(g: CanvasRenderingContext2D, s: number, pulse: boolean, mat: MaterialLook, od: boolean) {
+  const key: GemKey = pulse ? 'pulse' : gemFor(mat.id);
+  const im = gemImage(key);
+  if (!im) { paintCrystal6(g, s, pulse, mat, od); return; }
+  // contact shadow: stacked soft rounded squares (no canvas filters, which older iOS Safari lacks)
+  const sh = visuals.shadow;
+  for (let i = 0; i < 5; i++) {
+    const grow = s * (0.0 + i * 0.03);
+    g.fillStyle = `rgba(0,0,0,${0.16 * sh})`;
+    roundRect(g, s * 0.05 - grow / 2 + s * 0.035, s * 0.06 - grow / 2 + s * 0.06, s * 0.9 + grow, s * 0.9 + grow, s * 0.1 + grow / 2); g.fill();
+  }
+  const r = gemRect(s);
+  g.drawImage(im, r.x, r.y, r.w, r.w);
+  if (od) {
+    // Overdrive: the stone's own light, a little warmer and stronger
+    const prev = g.globalCompositeOperation;
+    g.globalCompositeOperation = 'lighter'; g.globalAlpha = 0.22;
+    g.drawImage(im, r.x, r.y, r.w, r.w);
+    g.globalAlpha = 1; g.globalCompositeOperation = prev;
+  }
+  if (highContrast) {
+    g.strokeStyle = '#FFFFFF'; g.lineWidth = Math.max(1, s * 0.03);
+    roundRect(g, s * 0.04, s * 0.04, s * 0.92, s * 0.92, s * 0.04); g.stroke();
+  }
+}
+
+/**
+ * Where the gem render is drawn relative to a cell of size s. The stone covers 94% of the cell, a little less than
+ * the compartment's opening, so a dark seam and the lit lip show round it and it reads as sitting inside.
+ */
+export function gemRect(s: number) {
+  const w = (s * 0.94) / GEM_SPAN;
+  return { x: s / 2 - w / 2, y: s / 2 - w / 2 + w * GEM_RISE, w };
+}
+
+const scratch = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+/**
+ * Build 8 glint: a narrow band of light travelling across the stone's facets from the upper left (the global light
+ * direction), masked to the gem itself. p runs 0..1; strength scales the band (placement glints are a little brighter).
+ */
+export function drawGlint(g: CanvasRenderingContext2D, x: number, y: number, s: number, p: number, pulse: boolean, mat: MaterialLook = current, strength = 1) {
+  if (blockStyle() !== 'b8') return;
+  const im = gemImage(pulse ? 'pulse' : gemFor(mat.id));
+  if (!im) return;
+  const r = gemRect(s);
+  glintImage(g, im, x + r.x, y + r.y, r.w, p, strength);
+}
+
+/** A glint across any gem render drawn at (x, y) with width w (menus use it for stones outside the board). */
+export function glintImage(g: CanvasRenderingContext2D, im: CanvasImageSource, x: number, y: number, w: number, p: number, strength = 1) {
+  if (!scratch || p <= 0 || p >= 1) return;
+  const px = Math.ceil(w * dpr);
+  if (scratch.width < px) { scratch.width = px; scratch.height = px; }
+  const c = scratch.getContext('2d')!;
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.globalCompositeOperation = 'source-over';
+  c.clearRect(0, 0, px, px);
+  c.drawImage(im, 0, 0, px, px);
+  c.globalCompositeOperation = 'source-in';
+  const u = -0.35 + p * 1.7; // band centre along the diagonal
+  const band = c.createLinearGradient(0, 0, px, px);
+  const st = (v: number) => Math.max(0, Math.min(1, v));
+  band.addColorStop(st(u - 0.16), 'rgba(255,255,255,0)');
+  band.addColorStop(st(u - 0.03), `rgba(255,255,255,${0.55 * strength})`);
+  band.addColorStop(st(u), `rgba(255,255,255,${0.85 * strength})`);
+  band.addColorStop(st(u + 0.03), `rgba(255,255,255,${0.55 * strength})`);
+  band.addColorStop(st(u + 0.16), 'rgba(255,255,255,0)');
+  c.fillStyle = band; c.fillRect(0, 0, px, px);
+  const prev = g.globalCompositeOperation;
+  g.globalCompositeOperation = 'lighter';
+  g.drawImage(scratch, 0, 0, px, px, x, y, w, w);
+  g.globalCompositeOperation = prev;
 }
 
 /** Draws a block at (x,y) with size s. */
@@ -288,7 +371,10 @@ export function drawBlock(g: CanvasRenderingContext2D, x: number, y: number, s: 
 export function drawBlockShards(g: CanvasRenderingContext2D, x: number, y: number, s: number, pulse: boolean, p: number, seed: number, fx: { material?: MaterialLook; od?: boolean; power?: number; dir?: [number, number] } = {}) {
   if (p >= 1) return;
   const mat = fx.material ?? current;
-  const spr = sprite(s, pulse, mat, fx.od);
+  // Build 8: the shards are cut from the gem itself (not the sprite with its contact shadow).
+  const gem = blockStyle() === 'b8' ? gemImage(pulse ? 'pulse' : gemFor(mat.id)) : undefined;
+  const gr = gemRect(s);
+  const spr: CanvasImageSource = gem ?? sprite(s, pulse, mat, fx.od);
   const m = s * MARGIN;
   const rnd = (i: number) => { const v = Math.sin(seed * 91.7 + i * 17.3) * 43758.5453; return v - Math.floor(v); };
   const bx = x + s * (0.38 + 0.24 * rnd(1)), by = y + s * (0.38 + 0.24 * rnd(2));
@@ -310,7 +396,8 @@ export function drawBlockShards(g: CanvasRenderingContext2D, x: number, y: numbe
     g.translate(cx + ox, cy + oy); g.rotate(rot); g.scale(sc, sc); g.translate(-cx, -cy);
     g.beginPath(); g.moveTo(bx, by); g.lineTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.closePath();
     g.save(); g.clip();
-    g.drawImage(spr, x - m, y - m, s + m * 2, s + m * 2);
+    if (gem) g.drawImage(gem, x + gr.x, y + gr.y, gr.w, gr.w);
+    else g.drawImage(spr, x - m, y - m, s + m * 2, s + m * 2);
     // Freshly broken edges glow with the crystal's energy.
     g.globalCompositeOperation = 'lighter';
     g.fillStyle = rgba(pulse ? THEME.pulseCore : mat.highlight, 0.55 * (1 - p));
@@ -541,6 +628,100 @@ function paintFrame6(g: CanvasRenderingContext2D, x: number, y: number, w: numbe
     corner(x + o, y + o, 1, 1); corner(x + w - o, y + o, -1, 1); corner(x + o, y + h - o, 1, -1); corner(x + w - o, y + h - o, -1, -1);
     g.restore();
   }
+}
+
+/**
+ * Build 8 board: a matte gunmetal tray with 64 machined compartments. The compartments are one pre-rendered cell
+ * (graphite floor, lit walls, occlusion in the corners, highlights on the upper edges) tiled at the cell pitch, so
+ * the light direction is identical in every cell. The perimeter keeps Build 7's restrained cyan: a dim line with
+ * brighter corner brackets.
+ */
+export function paintBoard8(g: CanvasRenderingContext2D, x: number, y: number, w: number, rim: number, r: number, pad: number, pitch: number, tile: CanvasImageSource) {
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,0.75)'; g.shadowBlur = rim * 3.2; g.shadowOffsetY = rim * 1.1; g.shadowOffsetX = rim * 0.35;
+  g.fillStyle = '#10141A';
+  roundRect(g, x, y, w, w, r); g.fill();
+  g.restore();
+  const metal = g.createLinearGradient(x, y, x + w * 0.3, y + w);
+  metal.addColorStop(0, '#323944'); metal.addColorStop(0.1, '#1F242C'); metal.addColorStop(0.9, '#14181E'); metal.addColorStop(1, '#0C0F14');
+  g.fillStyle = metal;
+  roundRect(g, x, y, w, w, r); g.fill();
+  // machined outer bevel: catches the light on the top and left edges
+  const bev = g.createLinearGradient(x, y, x + w, y + w);
+  bev.addColorStop(0, 'rgba(220,230,245,0.42)'); bev.addColorStop(0.4, 'rgba(160,175,195,0.1)'); bev.addColorStop(1, 'rgba(0,0,0,0.55)');
+  g.strokeStyle = bev; g.lineWidth = 1.2;
+  roundRect(g, x + 0.6, y + 0.6, w - 1.2, w - 1.2, r); g.stroke();
+  // the compartment field
+  const fx = x + pad, fy = y + pad, fw = pitch * 8;
+  g.fillStyle = '#0B0E13';
+  g.fillRect(fx - 1, fy - 1, fw + 2, fw + 2);
+  for (let rr = 0; rr < 8; rr++) for (let cc = 0; cc < 8; cc++) g.drawImage(tile, fx + cc * pitch, fy + rr * pitch, pitch + 0.5, pitch + 0.5);
+  // the field sits a step below the frame: shadow under the upper and left lips, light on the lower-right lip
+  g.save();
+  g.beginPath(); g.rect(fx, fy, fw, fw); g.clip();
+  const top = g.createLinearGradient(0, fy, 0, fy + pitch * 0.35);
+  top.addColorStop(0, 'rgba(0,0,0,0.55)'); top.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = top; g.fillRect(fx, fy, fw, pitch * 0.35);
+  const left = g.createLinearGradient(fx, 0, fx + pitch * 0.25, 0);
+  left.addColorStop(0, 'rgba(0,0,0,0.4)'); left.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = left; g.fillRect(fx, fy, pitch * 0.25, fw);
+  g.restore();
+  g.strokeStyle = 'rgba(0,0,0,0.7)'; g.lineWidth = 1;
+  g.strokeRect(fx - 0.5, fy - 0.5, fw + 1, fw + 1);
+  g.strokeStyle = 'rgba(190,205,225,0.12)';
+  g.beginPath(); g.moveTo(fx + fw + 0.5, fy); g.lineTo(fx + fw + 0.5, fy + fw + 0.5); g.lineTo(fx, fy + fw + 0.5); g.stroke();
+  // restrained cyan perimeter: a dim line set into the frame, brighter at the corners
+  const o = (pad - 0) * 0.45, ix = x + o, iy = y + o, iw = w - o * 2, ir = Math.max(2, r - o);
+  g.save();
+  g.strokeStyle = rgba(THEME.pulse, highContrast ? 0.5 : 0.16); g.lineWidth = Math.max(1, rim * 0.12);
+  roundRect(g, ix, iy, iw, iw, ir); g.stroke();
+  g.strokeStyle = rgba(THEME.pulse, 0.8); g.lineWidth = Math.max(1.4, rim * 0.2); g.lineCap = 'round';
+  g.shadowColor = THEME.pulse; g.shadowBlur = rim * 1.2;
+  const Lc = w * 0.08;
+  const corner = (cx: number, cy: number, sx: number, sy: number) => {
+    g.beginPath();
+    g.moveTo(cx + sx * (ir + Lc), cy); g.lineTo(cx + sx * ir, cy);
+    g.arcTo(cx, cy, cx, cy + sy * ir, ir);
+    g.lineTo(cx, cy + sy * (ir + Lc)); g.stroke();
+  };
+  corner(ix, iy, 1, 1); corner(ix + iw, iy, -1, 1); corner(ix, iy + iw, 1, -1); corner(ix + iw, iy + iw, -1, -1);
+  g.restore();
+}
+
+/** Build 8 tray platform: a shallow machined recess (same graphite and gunmetal as the board) that presents a piece. */
+export function paintPlatform8(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, lit: number) {
+  const r = Math.min(14, w * 0.12);
+  g.save();
+  g.shadowColor = 'rgba(0,0,0,0.6)'; g.shadowBlur = 10; g.shadowOffsetY = 4;
+  const body = g.createLinearGradient(x, y, x + w * 0.3, y + h);
+  body.addColorStop(0, '#2A3039'); body.addColorStop(0.15, '#1A1F27'); body.addColorStop(1, '#0E1117');
+  g.fillStyle = body; roundRect(g, x, y, w, h, r); g.fill();
+  g.restore();
+  const bev = g.createLinearGradient(x, y, x + w, y + h);
+  bev.addColorStop(0, 'rgba(220,230,245,0.3)'); bev.addColorStop(0.5, 'rgba(150,165,185,0.06)'); bev.addColorStop(1, 'rgba(0,0,0,0.5)');
+  g.strokeStyle = bev; g.lineWidth = 1;
+  roundRect(g, x + 0.5, y + 0.5, w - 1, h - 1, r); g.stroke();
+  // recess
+  const ins = Math.max(4, w * 0.045), rx = x + ins, ry = y + ins, rw = w - ins * 2, rh = h - ins * 2, ri = Math.max(3, r - ins * 0.6);
+  const floor = g.createLinearGradient(rx, ry, rx + rw * 0.4, ry + rh);
+  floor.addColorStop(0, '#0B0E13'); floor.addColorStop(1, '#151A21');
+  g.fillStyle = floor; roundRect(g, rx, ry, rw, rh, ri); g.fill();
+  g.save(); roundRect(g, rx, ry, rw, rh, ri); g.clip();
+  const sh = g.createLinearGradient(0, ry, 0, ry + ins * 3);
+  sh.addColorStop(0, 'rgba(0,0,0,0.6)'); sh.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = sh; g.fillRect(rx, ry, rw, ins * 3);
+  const pool = g.createRadialGradient(rx + rw / 2, ry + rh * 0.55, 0, rx + rw / 2, ry + rh * 0.55, rw * 0.6);
+  pool.addColorStop(0, rgba(THEME.pulse, 0.04 + 0.06 * lit)); pool.addColorStop(1, rgba(THEME.pulse, 0));
+  g.fillStyle = pool; g.fillRect(rx, ry, rw, rh);
+  g.restore();
+  g.strokeStyle = 'rgba(190,205,225,0.1)'; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(rx + ri, ry + rh + 0.5); g.lineTo(rx + rw - ri, ry + rh + 0.5); g.stroke();
+  // a thin cyan lip on the front edge (brighter when the piece can be played)
+  g.save();
+  g.strokeStyle = rgba(THEME.pulse, 0.2 + 0.35 * lit); g.lineWidth = 1.5; g.lineCap = 'round';
+  g.shadowColor = THEME.pulse; g.shadowBlur = 6 * lit;
+  g.beginPath(); g.moveTo(x + r + 8, y + h - 1.2); g.lineTo(x + w - r - 8, y + h - 1.2); g.stroke();
+  g.restore();
 }
 
 /**

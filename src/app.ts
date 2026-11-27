@@ -31,6 +31,7 @@ import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } f
 import { music, setMusicEnabled, setMusicVolume, setSfxVolume, setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
+import { preloadGems } from './render/gems';
 import { DEFAULT_VISUALS, currentMaterial, setBlockStyle, setHighContrast, type BlockStyle, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
 import { paintDailyPreview, paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
@@ -587,7 +588,7 @@ export class App {
         const n = r.rows.length + r.cols.length;
         sfx.clear(n, r.combo);
         sfx.comboUp(r.combo);
-        haptic(n >= 3 ? 'big' : n === 2 ? 'multi' : 'clear');
+        haptic(n >= 4 ? 'quad' : n === 3 ? 'big' : n === 2 ? 'multi' : 'clear');
         if (r.shieldRestored) this.animateShield('restore');
         this.displayedScore = tutorial ? 0 : r.scoreAfter;
         this.updateHud();
@@ -1775,18 +1776,19 @@ export class App {
   private bindGraphics() {
     const box = document.getElementById('gfxProto');
     if (__RELEASE__) { box?.remove(); return; }
-    const saved = load('bloq.graphics');
     const apply = (st: BlockStyle) => {
       setBlockStyle(st);
       document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.gfx === st)));
       if (this.screen === 'game') this.view.resize();
       this.wake();
     };
-    apply(saved === 'b4' || saved === 'b5b' || saved === 'b5c' || saved === 'b6' ? saved : 'b6');
+    // Build 8: the gemstone style is the default; earlier prototype choices are kept under the old key only.
+    const saved8 = load('bloq.graphics8');
+    apply(saved8 === 'b4' || saved8 === 'b5b' || saved8 === 'b5c' || saved8 === 'b6' || saved8 === 'b8' ? saved8 : 'b8');
     document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.addEventListener('click', () => {
       const st = b.dataset.gfx as BlockStyle;
-      store('bloq.graphics', st); apply(st); sfx.select();
-      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid', b6: 'Build 6: energy crystal' }[st]);
+      store('bloq.graphics8', st); apply(st); sfx.select();
+      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid', b6: 'Build 6: energy crystal', b8: 'Build 8: gemstones' }[st]);
     }));
   }
 
@@ -1797,6 +1799,8 @@ export class App {
       if (t?.closest('button, .btn, .seg button, [role="button"]')) sfx.click();
     }, { capture: true });
     this.bindGraphics();
+    // Build 8: decode the gemstone renders once; until they are ready the Build 6 crystals stand in.
+    void preloadGems().then(() => { if (this.screen === 'game') this.view.resize(); this.wake(); });
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());
