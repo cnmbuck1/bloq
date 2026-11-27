@@ -15,6 +15,11 @@ Energy), **evolving materials** (six anodized-metal finishes unlocked for good a
 and 11), level-based piece difficulty, career statistics, 19 achievements, a richer results screen and share
 card. See `docs/BUILD3_REPORT.md`.
 
+Build 4, **The Experience Update**, adds scoring ruleset 2 with Perfect Board Clears, **Combo Protection**,
+**Overdrive** (a hand-activated ×2 state with free rotations), the **Daily Challenge** with streaks and a
+calendar, a Game Center leaderboard layer, 13 more achievements, solid metal block rendering, music and a new
+home, results and share cards. See `docs/BUILD4_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -44,7 +49,7 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 3" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 4" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.
@@ -53,7 +58,11 @@ Development builds only. In Settings, tap the "BLOQ Build 3" label five times (o
   block brightness, reflectivity, edge highlight, Pulse glow and energy-wave intensity.
 - **Advanced JSON**: level thresholds, titles and endless formula, difficulty bands and cap, material colours
   and unlock levels, and scoring, edited live and validated before they apply.
-- **Scenarios**: 19 Build 3 scenarios (levels, multi-level moves, unlocks, fixed material, level-up energy,
+- **Build 4**: Combo Protection, Overdrive duration, multiplier and rotation benefit, ruleset, Daily
+  placement limit and date override, visual depth and lighting, and testing buttons (set score, level, energy or
+  Overdrive, piece sequence, validate 30 Dailies, test achievement).
+- **Scenarios**: Build 4 and Build 4 showcase groups (protection, Overdrive, Perfect Clear, big chains, level
+  and material transitions), 19 Build 3 scenarios (levels, multi-level moves, unlocks, fixed material, level-up energy,
   high-level generation, five-Pulse chain, multiple achievements, save/restore, beyond Level 15) and the 16
   Build 2 ones. Some Build 3 scenarios rewrite parts of the local career (they say so). `src/dev/scenarios.ts`.
 - **Board editor**: tap cells to cycle empty, block, Pulse.
@@ -115,17 +124,22 @@ screen footer, the share card and the app icon. There is no Orb in gameplay.
 
 All in `src/engine/config.ts`, passed to the engine as one object.
 
-- **Scoring**: 1 per block placed; lines 100 / 250 / 450 / 700, +250 for each line past four; 50 per Pulse
-  activated; 10 per extra block a Pulse clears; combo ×1.0 / 1.5 / 2.0 / 2.5 / 3.0 (applies to line and Pulse
-  points, not placement). Totals are rounded.
+- **Scoring (ruleset 2)**: 10 per block placed; lines 150 / 400 / 750 / 1,200, +400 for each line past four;
+  100 per Pulse activated; 25 per extra block a Pulse clears; 2,000 for a Perfect Board Clear; combo ×1.0 / 1.5 /
+  2.0 / 2.5 / 3.0 (applies to everything except placement), then ×2 while Overdrive is active. Totals are rounded.
+  Build 1–3 values are kept as `LEGACY_RULESET_1`.
+- **Combo Protection** (`combo.protection`): 1 non-clearing placement survived per clear.
+- **Overdrive** (`overdrive`): 5 placements, ×2, free rotations; charge 10 / 25 / 40 / 60 for 1–4 lines (+15 per
+  extra), +10 per Pulse, +10 for a 3+ chain, +30 for a Perfect Clear.
+- **Daily** (`daily`): 30 placements, 3 starting charges, 12% Pulse, piece mix 30/50/20, 6–10 starting blocks.
 - **Pulse chance**: 12% of generated pieces, at most one per piece.
 - **Repetition control**: pieces from the last 6 generated are weighted ×0.45; a piece already in the tray
   being built is weighted ×0.2.
 - **Difficulty by level** (`difficulty` in the config): the small / medium / large piece mix (1–2, 3–4, 5+
   cells) is 40/45/15 at Levels 1–2, 30/50/20 at 3–4, 25/45/30 at 5–6, 20/45/35 at 7–8, 15/45/40 at 9–10 and
   15/40/45 from Level 11 (the cap). A level-up changes only trays generated after it.
-- **Levels** (`progression`): 0, 1,000, 2,500, 4,500, 7,000, 10,000, 13,500, 17,500, 22,000, 27,000, 32,500,
-  38,500, 45,000, 52,000, 59,500; past Level 15 each gap grows by 500. Level-up restores energy to full.
+- **Levels** (`progression`): 0, 1,500, 4,000, 7,500, 12,000, 17,500, 24,000, 31,500, 40,000, 49,500, 60,000,
+  71,500, 84,000, 97,500, 112,000; past Level 15 each gap grows by 1,000. Level-up restores energy to full.
 - **Materials** (`materials`): Magenta L1, Electric Violet L3, Emerald L5, Solar Amber L7, Crimson L9,
   Quantum Platinum L11. Pulse Blocks always stay cyan.
 - **Fairness**: when a tray is generated, if no chosen piece fits but some library piece does, one slot is
