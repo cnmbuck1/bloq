@@ -295,15 +295,15 @@ describe('seeded generation', () => {
     }
   });
 
-  it('heavier difficulty tiers shift weights toward bigger pieces', () => {
-    const count = (score: number) => {
+  it('higher levels shift weights toward bigger pieces', () => {
+    const count = (level: number) => {
       const rng = new Rng(3); let big = 0;
-      for (let i = 0; i < 2000; i++) for (const p of generateTray(cfg, emptyBoard(), rng, { score, recent: [] }).tray) {
+      for (let i = 0; i < 2000; i++) for (const p of generateTray(cfg, emptyBoard(), rng, { score: 0, level, recent: [] }).tray) {
         if (['o3', 'l5a', 'l5b', 'l5c', 'l5d', 'i5h', 'i5v'].includes(p.defId)) big++;
       }
       return big;
     };
-    expect(count(20000)).toBeGreaterThan(count(0));
+    expect(count(11)).toBeGreaterThan(count(1));
   });
 });
 

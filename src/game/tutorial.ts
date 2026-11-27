@@ -79,7 +79,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
 export function tutorialState(step: TutorialStep): GameState {
   return {
     mode: 'tutorial', seed: 1, rngState: 1, board: boardFromArt(step.board), tray: step.tray.map((p) => (p ? { ...p, rot: 0 } : null)),
-    recent: [], score: 0, combo: 0, energy: step.energy ?? 3, over: false, pulseChance: 0,
+    recent: [], score: 0, combo: 0, energy: step.energy ?? 3, level: 1, over: false, pulseChance: 0,
     stats: freshStats(),
   };
 }

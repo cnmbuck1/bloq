@@ -49,7 +49,7 @@ describe('save and restore', () => {
     expect(restored!.state).toEqual(a);
     expect(restored!.elapsedMs).toBe(12345);
     expect(restored!.bestAtStart).toBe(900);
-    expect(restored!.version).toBe(2);
+    expect(restored!.version).toBe(3);
   });
 
   it('rejects corrupt, unknown-version and finished saves', () => {
@@ -71,8 +71,8 @@ describe('lifetime statistics', () => {
     g = { ...g, tray: [{ defId: 'i2v', color: 0, pulseIndex: -1 }, null, null] };
     const o = applyMove(g, 0, 0, 7);
     if (!o.ok) throw new Error('expected ok');
-    st = recordMove(st, o.result, '2026-11-26');
-    st = recordMove(st, o.result, '2026-11-26');
+    st = recordMove(st, o.result, undefined, '2026-11-26');
+    st = recordMove(st, o.result, undefined, '2026-11-26');
     expect(st.totalLines).toBe(4);
     expect(st.maxLinesAtOnce).toBe(2);
     expect(st.days).toEqual(['2026-11-26']);

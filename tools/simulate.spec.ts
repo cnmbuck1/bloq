@@ -38,7 +38,8 @@ function runMode(mode: RotationMode, N: number) {
   const extra = process.env.SIM_ROT ? JSON.parse(process.env.SIM_ROT) : {};
   const cfg: GameConfig = { ...DEFAULT_CONFIG, rotation: { ...DEFAULT_CONFIG.rotation, ...extra, mode } };
   const scores: number[] = [], moves: number[] = [], chains: number[] = [], pulses: number[] = [], rotations: number[] = [];
-  let starvedTurns = 0, totalTurns = 0;
+  const levels: number[] = [], levelEnergy: number[] = [];
+  let starvedTurns = 0, totalTurns = 0, savedByLevelEnergy = 0;
   const chainHist = new Map<number, number>();
   for (let seed = 1; seed <= N; seed++) {
     let s = newGame(seed, cfg);
@@ -54,11 +55,18 @@ function runMode(mode: RotationMode, N: number) {
       }
       const o = applyMove(s, m.slot, m.r, m.c, cfg);
       if (!o.ok) break;
+      if (o.result.levelAfter > o.result.levelBefore && o.result.levelEnergy > 0 && !o.state.over) {
+        // Would this move have ended the game without the level-up energy?
+        const noLu = applyMove(s, m.slot, m.r, m.c, { ...cfg, progression: { ...cfg.progression, levelUpEnergy: 'none' } });
+        if (noLu.ok && noLu.state.over) savedByLevelEnergy++;
+      }
       if (o.result.chain) chainHist.set(o.result.chain, (chainHist.get(o.result.chain) ?? 0) + 1);
       s = o.state;
     }
     scores.push(s.score); moves.push(s.stats.moves); chains.push(s.stats.maxChain); pulses.push(s.stats.pulsesActivated); rotations.push(s.stats.rotations);
+    levels.push(s.level); levelEnergy.push(s.stats.energyFromLevels ?? 0);
   }
+  const reach = (L: number) => Math.round((levels.filter((l) => l >= L).length / N) * 1000) / 10 + '%';
   const sorted = [...scores].sort((a, b) => a - b);
   const avg = (a: number[]) => Math.round((a.reduce((x, y) => x + y, 0) / a.length) * 10) / 10;
   return {
@@ -66,6 +74,9 @@ function runMode(mode: RotationMode, N: number) {
     avgMoves: avg(moves), avgRotations: avg(rotations), rotationsPerMove: Math.round((avg(rotations) / avg(moves)) * 1000) / 1000,
     turnsAtZeroEnergy: mode === 'energy' ? Math.round((starvedTurns / totalTurns) * 1000) / 10 + '%' : 'n/a',
     avgPulsesActivated: avg(pulses), gamesWithChain2plus: chains.filter((c) => c >= 2).length,
+    avgLevel: avg(levels), maxLevel: Math.max(...levels),
+    reachedLevel: { L2: reach(2), L3: reach(3), L5: reach(5), L7: reach(7), L9: reach(9), L10: reach(10), L11: reach(11) },
+    avgEnergyFromLevels: avg(levelEnergy), gamesSavedByLevelEnergy: savedByLevelEnergy,
     chainEvents: Object.fromEntries([...chainHist].sort((a, b) => a[0] - b[0])),
   };
 }

@@ -23,12 +23,15 @@
       <div class="home-center">
         <canvas id="homeArt" class="home-art" aria-hidden="true"></canvas>
         <p class="home-best" id="homeBest"></p>
+        <p class="home-level" id="homeLevel"></p>
         <button id="btnPlay" class="btn btn-primary btn-xl">PLAY</button>
         <button id="btnContinue" class="btn btn-secondary" hidden>CONTINUE</button>
       </div>
       <nav class="home-bottom" aria-label="Menu">
-        <button class="btn-icon" id="btnStats" aria-label="Statistics">
-          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></span><span>Statistics</span></button>
+        <button class="btn-icon" id="btnMaterials" aria-label="Materials">
+          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.6" fill="currentColor"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.6" fill="currentColor" opacity=".55"/></svg></span><span>Materials</span></button>
+        <button class="btn-icon" id="btnStats" aria-label="Statistics and achievements">
+          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></span><span>Stats</span></button>
         <button class="btn-icon" id="btnHow" aria-label="How to play">
           <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9.2 9a3 3 0 1 1 4 2.8c-.8.3-1.2 1-1.2 1.8V14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/></svg></span><span>How to Play</span></button>
         <button class="btn-icon" id="btnSettings" aria-label="Settings">
@@ -56,6 +59,16 @@
         <div class="score-block best" id="bestWrap">
           <span class="label">PERSONAL BEST</span>
           <span class="best-value" id="best">0</span>
+        </div>
+      </div>
+      <div class="level" id="levelHud" aria-live="polite">
+        <div class="level-row">
+          <span class="level-name"><span id="levelNum">LEVEL 1</span> — <b id="levelTitle">INITIATE</b></span>
+          <span class="level-pts" id="levelPts">0 / 1,000</span>
+        </div>
+        <div class="level-row">
+          <span class="level-bar" aria-hidden="true"><i id="levelFill"></i></span>
+          <span class="level-left" id="levelLeft">1,000 points to Level 2</span>
         </div>
       </div>
       <div class="status" id="status">
@@ -98,7 +111,11 @@
         <p class="res-kicker" id="resKicker">GAME OVER</p>
         <div class="res-score" id="resScore">0</div>
         <p class="res-best" id="resBest"></p>
+        <p class="res-level" id="resLevel"></p>
+        <ul class="res-acc" id="resAcc"></ul>
         <dl class="res-grid">
+          <div><dt>Level reached</dt><dd id="resLvl" class="gold">1</dd></div>
+          <div><dt>Highest level</dt><dd id="resLvlBest">1</dd></div>
           <div><dt>Lines cleared</dt><dd id="resLines">0</dd></div>
           <div><dt>Largest clear</dt><dd id="resMaxLines">0</dd></div>
           <div><dt>Highest combo</dt><dd id="resCombo">0</dd></div>
@@ -106,6 +123,7 @@
           <div><dt>Rotations</dt><dd id="resRot">0</dd></div>
           <div><dt>Time</dt><dd id="resTime">0:00</dd></div>
         </dl>
+        <p class="res-next" id="resNext"></p>
         <button class="btn btn-primary btn-xl" id="btnAgain">PLAY AGAIN</button>
         <div class="row">
           <button class="btn btn-secondary" id="btnShare">Share Result</button>
@@ -116,8 +134,25 @@
 
     <div class="overlay" id="stats" hidden role="dialog" aria-modal="true" aria-label="Statistics">
       <div class="sheet">
-        <h2>Statistics</h2>
-        <dl class="stat-grid" id="statGrid"></dl>
+        <div class="tabs" role="tablist">
+          <button class="tab on" id="tabStats" role="tab" aria-selected="true">Statistics</button>
+          <button class="tab" id="tabAch" role="tab" aria-selected="false">Achievements <span id="achCount"></span></button>
+        </div>
+        <div class="scroll" id="statsPane"><dl class="stat-grid" id="statGrid"></dl></div>
+        <div class="scroll" id="achPane" hidden><ul class="ach-list" id="achList"></ul></div>
+        <button class="btn btn-primary" data-close>DONE</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="materials" hidden role="dialog" aria-modal="true" aria-label="Materials">
+      <div class="sheet">
+        <h2>Materials</h2>
+        <div class="seg" role="radiogroup" aria-label="Material mode">
+          <button class="seg-btn" id="matProgressive" role="radio">Progressive</button>
+          <button class="seg-btn" id="matFixed" role="radio">Fixed</button>
+        </div>
+        <p class="mat-note" id="matNote"></p>
+        <div class="scroll"><ul class="mat-list" id="matList"></ul></div>
         <button class="btn btn-primary" data-close>DONE</button>
       </div>
     </div>
@@ -131,6 +166,7 @@
           <li><b>Clear on consecutive moves</b> to build a combo, up to ×3.</li>
           <li><span class="pulse-chip" aria-hidden="true">◆</span> <b>Pulse Blocks</b> clear the 8 cells around them when their line clears. A blast that hits another Pulse sets it off too.</li>
           <li><span class="rot-chip" aria-hidden="true">⟳</span> <b>Rotate</b> a piece with its button. Each turn uses 1 Rotation Energy; each line you clear restores 1, up to 3.</li>
+          <li><b>Level up</b> as your score grows. Each level refills your Rotation Energy, brings tougher pieces and, every two levels, a new block material.</li>
           <li>The game ends when none of your pieces fit, even with the rotations you can afford.</li>
         </ol>
         <button class="btn btn-primary" id="btnTutorial">PLAY THE TUTORIAL</button>
@@ -156,7 +192,20 @@
           <label class="field"><span>Single clear</span><input id="devClear" type="range" min="200" max="350" step="10" /><output id="devClearOut"></output></label>
           <label class="field"><span>Particles</span><select id="devParticles"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <label class="field"><span>Haptic intensity</span><select id="devHaptic"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-          <p class="dev-note">Rotation settings apply from the next game.</p>
+          <label class="field"><span>Level-up energy</span><select id="devLevelEnergy"><option value="full">Full restore</option><option value="one">One charge</option><option value="none">None</option></select></label>
+          <label class="field"><span>Level-up length</span><input id="devLevelMs" type="range" min="700" max="1200" step="50" /><output id="devLevelMsOut"></output></label>
+          <label class="field"><span>Material wave</span><input id="devMatMs" type="range" min="400" max="700" step="50" /><output id="devMatMsOut"></output></label>
+          <label class="field"><span>Block brightness</span><input id="devBright" type="range" min="0.6" max="1.4" step="0.05" /><output id="devBrightOut"></output></label>
+          <label class="field"><span>Reflectivity</span><input id="devRefl" type="range" min="0" max="2" step="0.1" /><output id="devReflOut"></output></label>
+          <label class="field"><span>Edge highlight</span><input id="devEdge" type="range" min="0" max="2" step="0.1" /><output id="devEdgeOut"></output></label>
+          <label class="field"><span>Pulse glow</span><input id="devGlow" type="range" min="0.3" max="1.8" step="0.1" /><output id="devGlowOut"></output></label>
+          <label class="field"><span>Energy waves</span><input id="devWave" type="range" min="0.3" max="1.8" step="0.1" /><output id="devWaveOut"></output></label>
+          <p class="dev-note">Rotation and progression settings apply from the next game.</p>
+          <details class="dev-json">
+            <summary>Advanced: levels, difficulty, materials, scoring (JSON)</summary>
+            <textarea id="devJson" rows="12" spellcheck="false"></textarea>
+            <div class="row"><button class="btn btn-secondary" id="devJsonApply">Apply</button><button class="btn btn-ghost" id="devJsonReset">Defaults</button></div>
+          </details>
           <label class="field"><span>Scenario</span><select id="devScenario"></select></label>
           <button class="btn btn-secondary" id="devLoad">Load scenario</button>
           <button class="btn btn-secondary" id="devEdit">Board editor</button>
@@ -164,7 +213,7 @@
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
         <button class="btn btn-primary" data-close>DONE</button>
-        <p class="version" id="version">BLOQ Build 2</p>
+        <p class="version" id="version">BLOQ Build 3</p>
       </div>
     </div>
 

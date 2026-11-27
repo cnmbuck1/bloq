@@ -267,7 +267,7 @@ describe('session lock and persistence', () => {
     const { energy: _e, ...v1state } = s;
     const v1 = JSON.stringify({ version: 1, savedAt: 1, elapsedMs: 5000, bestAtStart: 1234, state: { ...v1state, tray: s.tray.map((t) => t && { defId: t.defId, color: 3, pulseIndex: t.pulseIndex }) } });
     const m = deserializeGame(v1);
-    expect(m?.version).toBe(2);
+    expect(m?.version).toBe(3);
     expect(m?.state.energy).toBe(3);
     expect(m?.state.tray.every((t) => !t || t.rot === 0)).toBe(true);
     expect(m?.bestAtStart).toBe(1234);

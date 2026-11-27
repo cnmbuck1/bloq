@@ -2,7 +2,9 @@
 // the shareable results card and the app icon / launch art. All generated locally.
 
 import { drawOrbIcon } from '../brand/cnmbuck-orb';
-import { drawBlock, paintFrame, roundRect, setRenderScale } from '../render/blocks';
+import { drawBlock, paintFrame, roundRect, setRenderScale, type MaterialLook } from '../render/blocks';
+
+const MAGENTA_LOOK: MaterialLook = { id: 'magenta', color: '#D936AD', highlight: '#FF9BEA', shadow: '#64164F' };
 import { THEME, rgba } from '../render/theme';
 
 const FONT = '-apple-system, "SF Pro Display", "Helvetica Neue", Arial, sans-serif';
@@ -83,7 +85,8 @@ export function paintLogoCanvas(canvas: HTMLCanvasElement, t = 0) {
   drawLogo(g, w / 2, h / 2, Math.min(h * 0.78, w * 0.2), t);
 }
 
-// A small machined arrangement: titanium blocks around a Pulse, with a slow scan of light.
+// A small machined arrangement: blocks in the current material around a Pulse, with a slow scan of light and,
+// every few seconds, a restrained Pulse discharge.
 const ART = [
   '..XXX...',
   '.XXPX.X.',
@@ -107,6 +110,38 @@ export function paintHomeArt(canvas: HTMLCanvasElement, t: number, reduced: bool
     const near = Math.max(0, 1 - Math.abs(c + r - scan) / 1.6);
     drawBlock(g, x, y, cell, ch === 'P', t, reduced, { bright: near * 0.35 });
   }));
+  if (reduced) return;
+  // Pulse discharge: a cyan ring spreading over the 3x3 around the Pulse, once every 6.5 s.
+  const phase = (t % 6500) / 6500;
+  if (phase < 0.12) {
+    const p = phase / 0.12;
+    const pr = ART.findIndex((l) => l.includes('P')), pc = ART[pr].indexOf('P');
+    const cx = ox + pc * pitch + pitch / 2, cy = oy + pr * pitch + pitch / 2;
+    g.save();
+    g.strokeStyle = rgba(THEME.pulse, 0.7 * (1 - p)); g.lineWidth = 2 + 3 * (1 - p);
+    g.shadowColor = THEME.pulse; g.shadowBlur = 14;
+    roundRect(g, cx - pitch * 1.5 * p, cy - pitch * 1.5 * p, pitch * 3 * p, pitch * 3 * p, pitch * 0.3 * p); g.stroke();
+    g.restore();
+  }
+}
+
+/** Materials menu preview: a 2×2 cluster in one material (locked ones are dimmed by the caller). */
+export function paintMaterialSwatch(canvas: HTMLCanvasElement, m: MaterialLook, locked: boolean) {
+  const { g, w, h } = fit(canvas);
+  g.clearRect(0, 0, w, h);
+  const pitch = Math.min(w, h) / 2.15, cell = pitch * 0.9;
+  const ox = (w - pitch * 2) / 2, oy = (h - pitch * 2) / 2;
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 2; c++) {
+    drawBlock(g, ox + c * pitch + (pitch - cell) / 2, oy + r * pitch + (pitch - cell) / 2, cell, false, 0, true, { material: m, alpha: locked ? 0.35 : 1 });
+  }
+  if (locked) {
+    // a small padlock over the swatch
+    const cx = w / 2, cy = h / 2 + 2, s = Math.min(w, h) * 0.2;
+    g.fillStyle = 'rgba(12,19,29,0.85)'; roundRect(g, cx - s, cy - s * 0.4, s * 2, s * 1.5, s * 0.3); g.fill();
+    g.strokeStyle = THEME.textDim; g.lineWidth = Math.max(2, s * 0.25);
+    g.beginPath(); g.arc(cx, cy - s * 0.4, s * 0.6, Math.PI, 0); g.stroke();
+    g.fillStyle = THEME.textDim; g.beginPath(); g.arc(cx, cy + s * 0.3, s * 0.22, 0, Math.PI * 2); g.fill();
+  }
 }
 
 export function paintSplash(canvas: HTMLCanvasElement) {
@@ -125,7 +160,11 @@ export function paintSplash(canvas: HTMLCanvasElement) {
   for (const ch of label) { g.fillText(ch, x, h / 2 + size * 0.45); x += g.measureText(ch).width + sp; }
 }
 
-export interface ShareInfo { score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean }
+export interface ShareInfo {
+  score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean;
+  /** Build 3 */
+  level: number; title: string; material: MaterialLook; message: string;
+}
 
 function background(g: CanvasRenderingContext2D, W: number, H: number) {
   const bg = g.createLinearGradient(0, 0, 0, H);
@@ -147,40 +186,52 @@ export function renderShareCard(info: ShareInfo): HTMLCanvasElement {
 
   // A fragment of board in the top corners: machined blocks and a Pulse.
   const frag = (x0: number, y0: number, art: string[]) => art.forEach((line, r) => [...line].forEach((ch, col) => {
-    if (ch !== '.') drawBlock(g, x0 + col * 92, y0 + r * 92, 82, ch === 'P', 0, true, { alpha: 0.85 });
+    if (ch !== '.') drawBlock(g, x0 + col * 92, y0 + r * 92, 82, ch === 'P', 0, true, { alpha: 0.9, material: info.material });
   }));
   frag(48, 48, ['XX', 'XP']);
   frag(W - 48 - 174, 48, ['XX', '.X']);
   frag(48, H - 48 - 82, ['XX']);
   frag(W - 48 - 174, H - 48 - 82, ['PX']);
 
-  drawLogo(g, W / 2, 290, 170);
+  drawLogo(g, W / 2, 270, 170);
 
-  paintFrame(g, 110, 430, W - 220, 600, 40, 14, true);
+  // Material glow behind the panel: the player's current material carries the card's colour.
+  const mg = g.createRadialGradient(W / 2, 730, 0, W / 2, 730, 560);
+  mg.addColorStop(0, rgba(info.material.color, 0.22)); mg.addColorStop(1, rgba(info.material.color, 0));
+  g.fillStyle = mg; g.fillRect(0, 300, W, 900);
+
+  paintFrame(g, 110, 400, W - 220, 640, 40, 14, true);
   g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillStyle = info.newRecord ? THEME.gold : THEME.textDim;
-  g.font = `700 38px ${FONT}`;
-  g.fillText(info.newRecord ? 'NEW PERSONAL BEST' : 'FINAL SCORE', W / 2, 520);
+  g.font = `700 36px ${FONT}`;
+  g.fillText(info.newRecord ? 'NEW PERSONAL BEST' : 'FINAL SCORE', W / 2, 480);
   g.fillStyle = THEME.text;
-  g.font = `900 170px ${FONT}`;
-  g.fillText(info.score.toLocaleString('en-US'), W / 2, 645);
+  g.font = `900 160px ${FONT}`;
+  g.fillText(info.score.toLocaleString('en-US'), W / 2, 595);
+  // Level reached, in champagne gold, with a material bar.
+  g.fillStyle = THEME.gold; g.font = `800 40px ${FONT}`;
+  g.fillText(`LEVEL ${info.level} — ${info.title.toUpperCase()}`, W / 2, 705);
+  const bar = g.createLinearGradient(0, 735, 0, 751);
+  bar.addColorStop(0, info.material.highlight); bar.addColorStop(0.55, info.material.color); bar.addColorStop(1, info.material.shadow);
+  g.fillStyle = bar; roundRect(g, W / 2 - 220, 735, 440, 14, 7); g.fill();
 
   const stat = (label: string, value: string, x: number) => {
     g.fillStyle = 'rgba(28,42,56,0.9)';
-    roundRect(g, x - 190, 770, 380, 200, 30); g.fill();
+    roundRect(g, x - 190, 800, 380, 190, 30); g.fill();
     g.strokeStyle = rgba(THEME.gridBorder, 0.9); g.lineWidth = 2;
-    roundRect(g, x - 190, 770, 380, 200, 30); g.stroke();
+    roundRect(g, x - 190, 800, 380, 190, 30); g.stroke();
     g.fillStyle = THEME.textDim; g.font = `700 30px ${FONT}`;
-    g.fillText(label, x, 825);
-    g.fillStyle = label.includes('CHAIN') ? THEME.pulse : THEME.text; g.font = `800 80px ${FONT}`;
-    g.fillText(value, x, 905);
+    g.fillText(label, x, 852);
+    g.fillStyle = label.includes('CHAIN') ? THEME.pulse : info.material.highlight; g.font = `800 78px ${FONT}`;
+    g.fillText(value, x, 930);
   };
   stat('BIGGEST CHAIN', info.chain ? `×${info.chain}` : '–', W / 2 - 205);
   stat('HIGHEST COMBO', info.combo ? `×${info.combo}` : '–', W / 2 + 205);
 
   g.fillStyle = THEME.text;
   g.font = `800 60px ${FONT}`;
-  g.fillText('Can you beat my score?', W / 2, 1120);
+  g.font = `800 ${info.message.length > 30 ? 50 : 58}px ${FONT}`;
+  g.fillText(info.message, W / 2, 1120);
 
   drawOrbIcon(g, 64, W / 2 - 186, 1192);
   g.fillStyle = THEME.textDim; g.textAlign = 'left';
@@ -198,7 +249,7 @@ export function renderAppIcon(size = 1024): HTMLCanvasElement {
   background(g, size, size);
   const cell = size * 0.19, pitch = size * 0.215, o = size * 0.06;
   const blocks: [number, number, boolean][] = [[0, 0, false], [0, 1, false], [1, 0, false], [3, 3, false], [3, 4, true], [4, 3, false], [4, 4, false]];
-  for (const [r, cc, p] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, p, 0, true);
+  for (const [r, cc, p] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, p, 0, true, { material: MAGENTA_LOOK });
   drawOrbIcon(g, size * 0.74, size * 0.13, size * 0.13);
   return c;
 }

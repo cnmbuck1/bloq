@@ -1,4 +1,4 @@
-// BLOQ Build 2 palette: graphite, brushed titanium and controlled cyan energy.
+// BLOQ palette: graphite surfaces, cyan energy. Build 3 standard blocks use level materials (config.materials).
 // Colour carries meaning: titanium = standard block, cyan = Pulse. Purple and gold are reserved
 // for future special blocks and are not used on blocks yet.
 
