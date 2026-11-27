@@ -20,6 +20,11 @@ Build 4, **The Experience Update**, adds scoring ruleset 2 with Perfect Board Cl
 calendar, a Game Center leaderboard layer, 13 more achievements, solid metal block rendering, music and a new
 home, results and share cards. See `docs/BUILD4_REPORT.md`.
 
+Build 5 is at its graphics **approval checkpoint**. It has two block renderers built with Three.js physically
+based materials and rendered once into cached sprites: **5B anodized metal** and **5C crystal-metal hybrid**. A
+selector in Settings (development builds only) switches between them and Build 4. It also has the redesigned Daily
+Challenge landing and history screens. See `docs/BUILD5_PROTOTYPE_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -49,7 +54,7 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 4" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 5 prototype" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.

@@ -358,3 +358,25 @@ export function renderLaunch(size = 2732): HTMLCanvasElement {
   drawLogo(g, size / 2, size / 2, size * 0.075);
   return c;
 }
+
+/**
+ * Build 5 Daily landing art: a compact cluster of today's blocks (magenta with one Pulse) on a soft champagne
+ * light pool. Static (no animation), so it costs nothing while the screen is open.
+ */
+export function paintDailyArt(canvas: HTMLCanvasElement) {
+  const { g, w, h } = fit(canvas);
+  g.clearRect(0, 0, w, h);
+  if (w < 4 || h < 4) return;
+  const LAYOUT = ['.XX..', 'XXPX.', '.XXXX'];
+  const cols = 5, rows = LAYOUT.length;
+  const pitch = Math.min(w / (cols + 0.6), h / (rows + 0.5));
+  const cell = pitch * 0.92;
+  const ox = (w - cols * pitch) / 2, oy = (h - rows * pitch) / 2;
+  const pool = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.42);
+  pool.addColorStop(0, rgba(THEME.gold, 0.13)); pool.addColorStop(0.55, rgba('#D936AD', 0.05)); pool.addColorStop(1, rgba(THEME.gold, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  LAYOUT.forEach((line, r) => [...line].forEach((ch, c) => {
+    if (ch === '.') return;
+    drawBlock(g, ox + c * pitch + (pitch - cell) / 2, oy + r * pitch + (pitch - cell) / 2, cell, ch === 'P', 0, true, { material: MAGENTA_LOOK });
+  }));
+}

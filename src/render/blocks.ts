@@ -4,6 +4,14 @@
 // sprites; only the Pulse core is drawn live.
 
 import { THEME, mix, rgba } from './theme';
+import { MARGIN_3D, available3D, renderBlock3D, type BlockStyle } from './block3d';
+
+export type { BlockStyle } from './block3d';
+let style: BlockStyle = 'b5c';
+/** Build 5 graphics selector: Build 4 canvas blocks, 5B anodized metal or 5C crystal-metal (3D rendered sprites). */
+export function setBlockStyle(s: BlockStyle) { if (s !== style) { style = s; cache.clear(); } }
+/** The style actually drawn (falls back to Build 4 when WebGL is unavailable). */
+export const blockStyle = (): BlockStyle => (style !== 'b4' && available3D() ? style : 'b4');
 
 /** What the renderer needs from a material (see config.materials). */
 export interface MaterialLook { id: string; color: string; highlight: string; shadow: string }
@@ -47,7 +55,7 @@ export const isHighContrast = () => highContrast;
 /** Deterministic noise for the brushed texture (same pattern every time). */
 function hash(i: number) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
 
-const MARGIN = 0.2; // sprite padding (fraction of s) for the contact shadow
+const MARGIN = MARGIN_3D; // sprite padding (fraction of s) for the contact shadow (0.2)
 
 /**
  * Build 4 premium metal: a solid tile with real thickness. A soft directional contact shadow sits under it, a
@@ -181,8 +189,14 @@ function paintPulseBody(g: CanvasRenderingContext2D, full: number) {
 }
 
 function sprite(size: number, pulse: boolean, mat: MaterialLook): HTMLCanvasElement {
-  const key = `${Math.round(size * 4)}|${pulse ? 'P' : mat.id + mat.color}|${highContrast ? 1 : 0}`;
+  const st = blockStyle();
+  const key = `${st}|${Math.round(size * 4)}|${pulse ? 'P' : mat.id + mat.color}|${highContrast ? 1 : 0}`;
   let c = cache.get(key);
+  if (!c && st !== 'b4') {
+    const px = Math.ceil(size * (1 + MARGIN * 2) * dpr);
+    const r = renderBlock3D(st, pulse, mat, px, { shadow: visuals.shadow, highContrast });
+    if (r) { c = r; cache.set(key, c); }
+  }
   if (!c) {
     c = document.createElement('canvas');
     const m = size * MARGIN;
@@ -221,7 +235,10 @@ export function drawBlock(g: CanvasRenderingContext2D, x: number, y: number, s: 
   if (alpha < 1) g.globalAlpha = alpha;
   const mat = fx.material ?? current;
   g.drawImage(sprite(s, pulse, mat), ox - m, oy - m, ss + m * 2, ss + m * 2);
-  if (pulse) drawPulseCore(g, ox, oy - ss * 0.04 * visuals.depth, ss, t, reduced, fx.charge ?? 0);
+  if (pulse) {
+    if (blockStyle() === 'b4') drawPulseCore(g, ox, oy - ss * 0.04 * visuals.depth, ss, t, reduced, fx.charge ?? 0);
+    else drawPulseAura(g, ox, oy, ss, t, reduced, fx.charge ?? 0);
+  }
   if (fx.bright && fx.bright > 0) {
     g.fillStyle = pulse ? `rgba(198,255,255,${0.75 * fx.bright})` : rgba(mat.highlight, 0.75 * fx.bright);
     roundRect(g, ox, oy, ss, ss * (1 - 0.085 * visuals.depth), ss * 0.12); g.fill();
@@ -253,6 +270,30 @@ export function drawPulseCore(g: CanvasRenderingContext2D, x: number, y: number,
     g.restore();
   }
   g.fillStyle = THEME.pulseCore; diamond(0.5 + 0.1 * k); g.fill();
+}
+
+/**
+ * Build 5: the 3D Pulse sprites already carry their crystal core, so the live layer is only light: a soft breathing
+ * glow around the core (additive, restrained) that intensifies before activation.
+ */
+function drawPulseAura(g: CanvasRenderingContext2D, x: number, y: number, s: number, t: number, reduced: boolean, charge: number) {
+  const breathe = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(t * 0.0028);
+  const k = Math.min(1, 0.35 + breathe * 0.35 + charge);
+  const cx = x + s / 2, cy = y + s * 0.47;
+  const prev = g.globalCompositeOperation;
+  g.globalCompositeOperation = 'lighter';
+  const glow = g.createRadialGradient(cx, cy, 0, cx, cy, s * (0.36 + 0.16 * charge));
+  glow.addColorStop(0, rgba(THEME.pulse, Math.min(0.85, (0.12 + 0.28 * k) * visuals.pulseGlow)));
+  glow.addColorStop(0.5, rgba(THEME.pulse, Math.min(0.4, 0.08 * k * visuals.pulseGlow)));
+  glow.addColorStop(1, rgba(THEME.pulse, 0));
+  g.fillStyle = glow;
+  g.fillRect(x - s * 0.1, y - s * 0.1, s * 1.2, s * 1.2);
+  if (charge > 0) {
+    g.fillStyle = rgba(THEME.pulseCore, 0.5 * charge);
+    const d = s * (0.12 + 0.08 * charge);
+    g.beginPath(); g.moveTo(cx, cy - d); g.lineTo(cx + d, cy); g.lineTo(cx, cy + d); g.lineTo(cx - d, cy); g.closePath(); g.fill();
+  }
+  g.globalCompositeOperation = prev;
 }
 
 /** A recessed empty cell in the board well. */

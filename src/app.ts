@@ -20,7 +20,7 @@ import {
   recordSessionGames, syncDaily, type LifetimeStats, type RecordContext,
 } from './game/stats';
 import {
-  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, type DailyRecords,
+  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, weekStrip, bestDays, type DailyRecords,
 } from './game/dailyRecords';
 import {
   LEADERBOARDS, flushQueue, gameCenterSupported, loadBoard, openDashboard, pruneExpired, queueSubmission, type LeaderboardKey, type PendingSubmission,
@@ -31,9 +31,9 @@ import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } f
 import { music, setMusicEnabled, setMusicVolume, setSfxVolume, setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
-import { DEFAULT_VISUALS, currentMaterial, setHighContrast, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
+import { DEFAULT_VISUALS, currentMaterial, setBlockStyle, setHighContrast, type BlockStyle, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
-import { paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
+import { paintDailyArt, paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
 import { InputController } from './ui/input';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -87,7 +87,7 @@ const defaultDev = (): DevConfig => ({
 });
 
 type ScreenId = 'splash' | 'home' | 'game';
-type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials' | 'dailyResults' | 'dailyHub' | 'rankings';
+type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials' | 'dailyResults' | 'dailyHub' | 'dailyHistory' | 'rankings';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 /** A challenge id as a friendly date ("27 November 2026"); it is a UTC date, shown as such. */
 const dayLabel = (id: string, year = true) => { const [y, m, d] = id.split('-').map(Number); return `${d} ${MONTHS[m - 1]}${year ? ` ${y}` : ''}`; };
@@ -354,23 +354,59 @@ export class App {
     this.wake();
   }
 
+  /**
+   * Build 5 Daily landing: play first. Date, a little art, the one-line rules, the primary action, three compact
+   * figures, this week's strip and the countdown, all inside the safe area with no scrolling. Everything else
+   * (the month calendar and detailed records) lives on the history screen.
+   */
   private renderDailyHub() {
     const id = this.today();
     const day = this.daily.days[id];
     const st = streaks(this.daily, id);
     const saved = this.dailySave();
+    const limit = this.dev.dailyLimit || this.cfg.daily.placementLimit;
     $('dhDate').textContent = dayLabel(id);
-    $('dhStatus').innerHTML = day?.completed
-      ? `Completed · today's best <b>${fmt(day.best)}</b>`
-      : saved ? `In progress · ${saved.state.stats.moves} of ${saved.state.daily?.limit ?? 30} placements` : "Today's challenge awaits";
+    $('dhLead').innerHTML = saved ? `Challenge in progress · <b>${saved.state.stats.moves} of ${saved.state.daily?.limit ?? limit}</b> moves`
+      : day?.completed ? `Completed · today&rsquo;s best <b>${fmt(day.best)}</b>` : 'Today&rsquo;s puzzle awaits';
+    $('dhRules').textContent = `${limit} moves · Same puzzle for everyone · No timer`;
+    $('btnDailyStart').textContent = saved ? 'CONTINUE CHALLENGE' : day?.completed ? 'PLAY AGAIN' : 'START CHALLENGE';
+    const best = Math.max(st.best, this.stats.bestDaily);
+    const stat = (v: string, k: string, cls = '') => `<div class="dl-stat ${cls}"><b>${v}</b><span>${k}</span></div>`;
+    $('dhStats').innerHTML = stat(`${st.current}`, st.current === 1 ? 'day streak' : 'day streak', 'streak')
+      + stat(`${st.completed}`, 'completed') + stat(best ? fmt(best) : '–', 'best daily');
+    const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const sym = { completed: '✓', today: '', missed: '–', future: '', before: '' } as const;
+    const word = { completed: 'completed', today: 'today, not played yet', missed: 'missed', future: 'upcoming', before: 'before your first challenge' } as const;
+    $('dhWeek').innerHTML = weekStrip(this.daily, id).map((d) =>
+      `<div class="wk ${d.state}${d.isToday ? ' is-today' : ''}" role="listitem" aria-label="${dayLabel(d.id, false)}, ${d.isToday && d.state === 'completed' ? 'today, completed' : word[d.state]}">`
+      + `<span class="wk-dow">${DOW[d.dow]}</span><span class="wk-dot">${d.isToday && d.state !== 'completed' ? '<i></i>' : sym[d.state]}</span></div>`).join('');
+    $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
+    requestAnimationFrame(() => { if (this.overlay === 'dailyHub') paintDailyArt($<HTMLCanvasElement>('dhArt')); });
+  }
+
+  /** The secondary screen: full month calendar, detailed streak figures and personal records. Scrolls if needed. */
+  private openDailyHistory() {
+    this.renderDailyHistory();
+    this.openOverlay('dailyHistory');
+  }
+
+  private renderDailyHistory() {
+    const id = this.today();
+    const day = this.daily.days[id];
+    const st = streaks(this.daily, id);
     const rows: [string, string][] = [
-      ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`], ['Completed', `${st.completed}`],
-      ['This month', `${st.thisMonth}`], ['Best daily', st.best ? fmt(st.best) : '–'], ['Today', day?.completed ? fmt(day.best) : '–'],
+      ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`],
+      ['Completed', `${st.completed}`], ['This month', `${st.thisMonth}`],
+      ['Best daily', st.best || this.stats.bestDaily ? fmt(Math.max(st.best, this.stats.bestDaily)) : '–'], ['Today\u2019s best', day?.completed ? fmt(day.best) : '–'],
     ];
-    $('dhStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    $('dhHistStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
     this.renderCalendar();
-    $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b> (midnight UTC)`;
-    $('btnDailyStart').textContent = saved ? 'CONTINUE' : day?.completed ? 'PLAY AGAIN' : 'START';
+    const recs = bestDays(this.daily, 5);
+    $('dhRecords').innerHTML = recs.length
+      ? recs.map((r, i) => `<li><span class="rk">${i + 1}</span><span class="rd">${dayLabel(r.id)}</span><b>${fmt(r.best)}</b></li>`).join('')
+      : '<li class="empty">Complete a Daily Challenge to set your first record.</li>';
+    const local = new Date(Date.UTC(2000, 0, 1)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    $('dhNote').textContent = `A new challenge starts every day at midnight UTC (${local} your time). Everyone plays the same board and pieces; replays are allowed and your first and best scores are both kept.`;
   }
 
   private msToNext() {
@@ -386,7 +422,7 @@ export class App {
     const dows = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<span class="dow">${d}</span>`).join('');
     const label = { completed: 'completed', today: 'today', missed: 'not played', future: 'upcoming', before: '' } as const;
     $('calGrid').innerHTML = dows + '<span></span>'.repeat(cal.leading) + cal.days.map((d) =>
-      `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}</span>`).join('');
+      `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}${d.state === 'completed' ? '<i aria-hidden="true">✓</i>' : ''}</span>`).join('');
     const [ty, tm] = today.split('-').map(Number);
     $<HTMLButtonElement>('calNext').disabled = y > ty || (y === ty && m >= tm);
   }
@@ -1676,7 +1712,30 @@ export class App {
 
   // ---------------------------------------------------------------- wiring
 
+  /**
+   * Build 5 graphics prototype selector (development builds only; release builds ship one style). Switching only
+   * swaps the block sprites: the game state, score and rules are untouched.
+   */
+  private bindGraphics() {
+    const box = document.getElementById('gfxProto');
+    if (__RELEASE__) { box?.remove(); return; }
+    const saved = load('bloq.graphics');
+    const apply = (st: BlockStyle) => {
+      setBlockStyle(st);
+      document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.gfx === st)));
+      if (this.screen === 'game') this.view.resize();
+      this.wake();
+    };
+    apply(saved === 'b4' || saved === 'b5b' || saved === 'b5c' ? saved : 'b5c');
+    document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.addEventListener('click', () => {
+      const st = b.dataset.gfx as BlockStyle;
+      store('bloq.graphics', st); apply(st); sfx.select();
+      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid' }[st]);
+    }));
+  }
+
   private bindUi() {
+    this.bindGraphics();
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());
@@ -1684,7 +1743,9 @@ export class App {
     on('btnAchievements', () => { this.renderStats(); this.statsTab('ach'); this.openOverlay('stats'); });
     on('btnRankings', () => this.openRankings());
     on('btnDaily', () => this.openDailyHub());
-    on('btnDailyStart', () => this.startDaily());
+    on('btnDailyStart', () => { sfx.select(); haptic('select'); this.startDaily(); });
+    on('btnDailyHistory', () => { sfx.select(); this.openDailyHistory(); });
+    on('dhHistBack', () => { this.renderDailyHub(); this.openOverlay('dailyHub'); });
     on('calPrev', () => this.shiftMonth(-1));
     on('calNext', () => this.shiftMonth(1));
     on('btnOverdrive', () => this.activateOverdrive());

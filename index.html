@@ -169,21 +169,45 @@
       </div>
     </div>
 
-    <div class="overlay" id="dailyHub" hidden role="dialog" aria-modal="true" aria-label="Daily Challenge">
-      <div class="sheet daily-hub">
-        <p class="res-kicker">DAILY CHALLENGE</p>
-        <h2 id="dhDate"></h2>
-        <p class="dh-status" id="dhStatus"></p>
-        <dl class="stat-grid dh-stats" id="dhStats"></dl>
-        <div class="cal" aria-label="Daily Challenge calendar">
-          <div class="cal-head"><button class="cal-nav" id="calPrev" aria-label="Previous month">‹</button><span id="calMonth"></span><button class="cal-nav" id="calNext" aria-label="Next month">›</button></div>
-          <div class="cal-grid" id="calGrid"></div>
-          <div class="cal-key"><span><i class="k-done"></i>Completed</span><span><i class="k-today"></i>Today</span><span><i class="k-missed"></i>Missed</span></div>
+    <div class="overlay daily-screen" id="dailyHub" hidden role="dialog" aria-modal="true" aria-labelledby="dhTitle">
+      <div class="dl">
+        <header class="dl-head">
+          <button class="dl-back" data-close aria-label="Back"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <h2 id="dhTitle">Daily Challenge</h2>
+          <span class="dl-back-spacer" aria-hidden="true"></span>
+        </header>
+        <p class="dl-date" id="dhDate"></p>
+        <canvas class="dl-art" id="dhArt" aria-hidden="true"></canvas>
+        <div class="dl-desc">
+          <p class="dl-lead" id="dhLead">Today&rsquo;s puzzle awaits</p>
+          <p class="dl-rules" id="dhRules">30 moves · Same puzzle for everyone · No timer</p>
         </div>
-        <p class="dh-rules">30 placements · the same board and pieces for everyone · no timer</p>
-        <p class="dh-next" id="dhNext"></p>
-        <button class="btn btn-primary btn-xl" id="btnDailyStart" data-focus>START</button>
-        <button class="btn btn-ghost" data-close>Close</button>
+        <button class="btn btn-gold" id="btnDailyStart" data-focus>START CHALLENGE</button>
+        <div class="dl-stats" id="dhStats"></div>
+        <div class="dl-week" id="dhWeek" role="list" aria-label="This week"></div>
+        <button class="dl-link" id="btnDailyHistory">View Full Calendar <span aria-hidden="true">›</span></button>
+        <p class="dl-next" id="dhNext"></p>
+      </div>
+    </div>
+
+    <div class="overlay daily-screen" id="dailyHistory" hidden role="dialog" aria-modal="true" aria-labelledby="dhHistTitle">
+      <div class="dl dl-history">
+        <header class="dl-head">
+          <button class="dl-back" id="dhHistBack" aria-label="Back to Daily Challenge"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5 8 12l7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <h2 id="dhHistTitle">Daily History</h2>
+          <span class="dl-back-spacer" aria-hidden="true"></span>
+        </header>
+        <div class="dl-scroll">
+          <dl class="dh-grid" id="dhHistStats"></dl>
+          <div class="cal" aria-label="Daily Challenge calendar">
+            <div class="cal-head"><button class="cal-nav" id="calPrev" aria-label="Previous month">‹</button><span id="calMonth"></span><button class="cal-nav" id="calNext" aria-label="Next month">›</button></div>
+            <div class="cal-grid" id="calGrid"></div>
+            <div class="cal-key"><span><i class="k-done">✓</i>Completed</span><span><i class="k-today">●</i>Today</span><span><i class="k-missed">–</i>Missed</span></div>
+          </div>
+          <h3 class="dh-sub">Personal records</h3>
+          <ol class="dh-records" id="dhRecords"></ol>
+          <p class="dh-note" id="dhNote"></p>
+        </div>
       </div>
     </div>
 
@@ -252,6 +276,14 @@
     <div class="overlay" id="settings" hidden role="dialog" aria-modal="true" aria-label="Settings">
       <div class="sheet">
         <h2>Settings</h2>
+        <div class="gfx-proto" id="gfxProto">
+          <span class="gfx-label">Block graphics <em>prototype</em></span>
+          <div class="seg" role="radiogroup" aria-label="Block graphics">
+            <button class="seg-btn" data-gfx="b4" role="radio">Build 4</button>
+            <button class="seg-btn" data-gfx="b5b" role="radio">5B Metal</button>
+            <button class="seg-btn" data-gfx="b5c" role="radio">5C Crystal</button>
+          </div>
+        </div>
         <label class="toggle"><span>Sound effects</span><input type="checkbox" id="setSound" /><i></i></label>
         <label class="field vol"><span>Effects volume</span><input id="setSfxVol" type="range" min="0" max="1" step="0.05" aria-label="Sound effects volume" /></label>
         <label class="toggle"><span>Music</span><input type="checkbox" id="setMusic" /><i></i></label>
@@ -312,7 +344,7 @@
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
         <button class="btn btn-primary" data-close>DONE</button>
-        <p class="version" id="version">BLOQ Build 4</p>
+        <p class="version" id="version">BLOQ Build 5 prototype</p>
       </div>
     </div>
 
