@@ -8,7 +8,8 @@ import type { Shape } from '../engine/pieces';
 import { playability, type Playability } from '../engine/rotation';
 import type { PlacementTarget } from '../game/session';
 import { Animator } from './animator';
-import { blockStyle, drawBlock, drawBlockShards, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
+import { compartmentImage } from './gems';
+import { blockStyle, drawBlock, drawBlockShards, drawGlint, isGemStyle, paintBoard8, paintPlatform8, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
 import { THEME, rgba } from './theme';
 
 export interface Layout {
@@ -83,14 +84,17 @@ export class GameView {
     this.canvas.height = Math.round(H * this.dpr);
     setRenderScale(this.dpr);
 
-    const side = 12;
+    // Build 7: the board is the largest square that fits: up to 93% of the width (a 3.5% gutter each side), with the
+    // tray taking what remains below it, never less than it needs for comfortable dragging.
+    // Build 8: 95% of the width (2.5% gutters), with a slimmer machined frame.
+    const side = Math.max(8, W * 0.025);
     // Build 4: the board keeps its Build 3 size; Overdrive and Rotation Energy share one compact row, and the tray
     // takes the space the old footer tagline used, so tray pieces grow 15–20%.
-    const energyH = Math.max(34, Math.min(46, H * 0.068));
-    const minTray = Math.max(124, H * 0.3);
-    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.6));
-    const frame = Math.max(6, boardPx * 0.026);
-    const pad = frame + Math.max(3, boardPx * 0.008);
+    const energyH = Math.max(30, Math.min(40, H * 0.055));
+    const minTray = Math.max(134, Math.min(170, H * 0.25));
+    const boardPx = Math.max(180, Math.min(W - side * 2, 640, H - energyH - minTray - 6));
+    const frame = Math.max(6, boardPx * 0.022);
+    const pad = frame + Math.max(2, boardPx * 0.006);
     const pitch = (boardPx - pad * 2) / 8;
     const gap = Math.max(2, pitch * 0.08);
     const bx = (W - boardPx) / 2;
@@ -262,6 +266,12 @@ export class GameView {
     c.width = Math.ceil(L.W * this.dpr); c.height = Math.ceil((L.by + L.boardPx + 16) * this.dpr);
     const g = c.getContext('2d')!;
     g.scale(this.dpr, this.dpr);
+    const tile = compartmentImage();
+    if (isGemStyle() && tile) {
+      paintBoard8(g, L.bx, L.by, L.boardPx, L.frame, L.pitch * 0.26, L.pad, L.pitch, tile);
+      this.boardBg = c;
+      return;
+    }
     paintFrame(g, L.bx, L.by, L.boardPx, L.boardPx, L.pitch * 0.32, L.frame, true);
     for (let r = 0; r < 8; r++) for (let col = 0; col < 8; col++) {
       const { x, y } = this.cellXY(r, col);
@@ -318,6 +328,16 @@ export class GameView {
       roundRect(g, x - 1, y - 1, L.cell + 2, L.cell + 2, L.cell * 0.16); g.fill();
     }
 
+    // Build 8 idle glints: now and then one stone catches the light (random stone and timing, at most two at once).
+    if (isGemStyle() && !this.reduced && !this.lowFx && now >= this.nextGlint) {
+      this.nextGlint = now + 1500 + Math.random() * 2800;
+      const occupied: number[] = [];
+      board.cells.forEach((c, k) => { if (c && !A.hidden.has(k)) occupied.push(k); });
+      if (occupied.length && A.glints.filter((gl) => gl.strength < 1).length < 2) {
+        A.glints.push({ k: occupied[Math.floor(Math.random() * occupied.length)], start: now, dur: 650, strength: 0.6 });
+      }
+    }
+
     // Placed blocks.
     const odOn = !!state.od && state.od.active > 0;
     const pp = A.placePulse;
@@ -331,22 +351,35 @@ export class GameView {
       if (pp && now >= pp.start && pp.cells.includes(k)) under = Math.sin(Math.PI * Math.min(1, (now - pp.start) / pp.dur)) * (this.reduced ? 0.5 : 1);
       const st = A.settles.get(k);
       if (st !== undefined) {
-        // Snap, then a 100 ms compression and settle.
-        const t = Math.min(1, (now - st) / 100);
-        lift = this.reduced ? 0 : (1 - t) * (1 - t) * 0.8;
-        scale = this.reduced ? 1 : 1 - 0.045 * Math.sin(Math.PI * t);
-        bright = Math.max(0, 0.4 * (1 - (now - st) / 170));
+        // Build 8 settle (140 ms): the crystal comes down into its compartment (slightly large, as if nearer the
+        // eye), compresses a touch as it seats, then rests; the contact shadow tightens under it.
+        const t = Math.min(1, (now - st) / 140);
+        lift = this.reduced ? 0 : (1 - t) * (1 - t) * 0.7;
+        scale = this.reduced ? 1 : t < 0.55 ? 1.05 - 0.09 * (t / 0.55) : 0.96 + 0.04 * ((t - 0.55) / 0.45);
+        bright = Math.max(0, 0.35 * (1 - (now - st) / 180));
       }
       if (A.glowCells && now >= A.glowCells.start && A.glowCells.cells.includes(k)) {
         const p = (now - A.glowCells.start) / A.glowCells.dur;
         bright = Math.max(bright, Math.min(1, p * 2.2) * 0.55 * Math.min(1.3, A.glowCells.strength));
       }
-      if (willClear.has(k)) bright = Math.max(bright, 0.22);
+      if (willClear.has(k)) bright = Math.max(bright, 0.2 + (this.reduced ? 0 : 0.06 * Math.sin(now * 0.008)));
       if (d?.blast.has(k)) bright = Math.max(bright, 0.18);
       drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, under, od: odOn && !cell.pulse, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0), material: this.matAt(Math.floor(k / 8), k % 8, now) });
-      // Contact highlight: the piece's edges catch the light as it locks in.
+      if (isGemStyle()) {
+        for (const gl of A.glints) {
+          if (gl.k !== k || now < gl.start) continue;
+          drawGlint(g, x, y, L.cell, (now - gl.start) / gl.dur, !!cell.pulse, this.matAt(Math.floor(k / 8), k % 8, now) ?? currentMaterial(), gl.strength);
+        }
+        // Lines this drop would complete: a slow light runs along them through the stones (anticipation only).
+        if (willClear.has(k) && !this.reduced) {
+          const pos = d!.lines.rows.includes(Math.floor(k / 8)) ? k % 8 : Math.floor(k / 8);
+          const ph = ((now / 900) % 1.6) - pos * 0.07;
+          if (ph > 0 && ph < 1) drawGlint(g, x, y, L.cell, ph, !!cell.pulse, this.matAt(Math.floor(k / 8), k % 8, now) ?? currentMaterial(), 0.55);
+        }
+      }
+      // Contact highlight: the piece's edges catch the light as it locks in (Build 8 uses the glint instead).
       const ct = A.contact;
-      if (ct && now >= ct.start && ct.cells.includes(k)) {
+      if (ct && now >= ct.start && ct.cells.includes(k) && !isGemStyle()) {
         const q = (now - ct.start) / ct.dur;
         g.strokeStyle = rgba(cell.pulse ? THEME.pulseCore : currentMaterial().highlight, 0.85 * (1 - q)); g.lineWidth = 1.6;
         roundRect(g, x + 0.8, y + 0.8, L.cell - 1.6, L.cell * 0.915 - 1.6, L.cell * 0.12); g.stroke();
@@ -381,9 +414,11 @@ export class GameView {
           if (r < 0 || c < 0 || r > 7 || c > 7) continue;
           const { x, y } = this.cellXY(r, c);
           // Build 6 invalid preview: a muted red socket, calmer than Build 4 (no bright outline flare).
-          g.fillStyle = rgba(THEME.invalid, 0.12);
+          // Build 8: calmer still: a faint warm-grey outline, no red fill.
+          const gemLook = isGemStyle();
+          g.fillStyle = gemLook ? 'rgba(210,190,190,0.05)' : rgba(THEME.invalid, 0.12);
           roundRect(g, x, y, L.cell, L.cell, L.cell * 0.13); g.fill();
-          g.strokeStyle = rgba(THEME.invalid, 0.6); g.lineWidth = 1.4;
+          g.strokeStyle = gemLook ? 'rgba(225,180,180,0.38)' : rgba(THEME.invalid, 0.6); g.lineWidth = 1.4;
           roundRect(g, x + 1.5, y + 1.5, L.cell - 3, L.cell - 3, L.cell * 0.13); g.stroke();
         }
       }
@@ -501,6 +536,8 @@ export class GameView {
       if (now < dy.start) {
         const b = now >= dy.brightFrom ? Math.min(1, (now - dy.brightFrom) / Math.max(1, dy.start - dy.brightFrom)) : 0;
         drawBlock(g, x, y, L.cell, dy.cell.pulse, now, this.reduced, { bright: 0.3 + 0.6 * b, od: dy.od, under: b * 0.6 });
+        // Build 8 energy build-up: light runs through the stone's facets just before it fractures.
+        if (isGemStyle() && !this.reduced && b > 0) drawGlint(g, x, y, L.cell, b, !!dy.cell.pulse, currentMaterial(), 0.9);
         continue;
       }
       const p = (now - dy.start) / dy.dur;
@@ -568,7 +605,23 @@ export class GameView {
       g.fillStyle = p.hue === 'cyan' ? THEME.pulse : p.hue === 'white' ? THEME.pulseCore : p.hue === 'gold' ? THEME.gold : currentMaterial().highlight;
       const s = p.size * L.pitch * (1 - life * 0.4);
       g.save(); g.translate(px, py); g.rotate(p.spin * life);
-      g.fillRect(-s / 2, -s / 2, s, s);
+      if (isGemStyle()) {
+        // Build 8: chips of gemstone (sharp triangles in the stone's colour with a lit facet), and tiny bright
+        // flecks that flash briefly; no round particles.
+        if (p.hue === 'white') {
+          const k = s * 0.55 * (1 - life);
+          g.fillStyle = 'rgba(255,255,255,0.95)';
+          g.beginPath(); g.moveTo(0, -k * 1.6); g.lineTo(k * 0.45, 0); g.lineTo(0, k * 1.6); g.lineTo(-k * 0.45, 0); g.closePath(); g.fill();
+        } else {
+          const col = p.hue === 'cyan' ? THEME.pulse : p.hue === 'gold' ? THEME.gold : currentMaterial().color;
+          const hi = p.hue === 'cyan' ? THEME.pulseCore : p.hue === 'gold' ? '#FFF3D1' : currentMaterial().highlight;
+          const a = s * 0.9;
+          g.fillStyle = col;
+          g.beginPath(); g.moveTo(-a * 0.6, -a * 0.5); g.lineTo(a * 0.7, -a * 0.2); g.lineTo(-a * 0.1, a * 0.7); g.closePath(); g.fill();
+          g.fillStyle = hi;
+          g.beginPath(); g.moveTo(-a * 0.6, -a * 0.5); g.lineTo(a * 0.7, -a * 0.2); g.lineTo(a * 0.05, -a * 0.08); g.closePath(); g.fill();
+        }
+      } else g.fillRect(-s / 2, -s / 2, s, s);
       g.restore();
     }
     g.globalAlpha = 1;
@@ -779,6 +832,7 @@ export class GameView {
     }
   }
   private comboEnv = 0;
+  private nextGlint = 0;
   /** Reduced effects (Settings): no drifting light, no dust, fewer particles. */
   lowFx = false;
 
@@ -802,8 +856,10 @@ export class GameView {
     if (since >= 0 && since < 700 && !active) {
       const q = 1 - since / 700;
       g.save();
-      g.strokeStyle = rgba('#E070D8', 0.45 * q * this.animator.energyAmt); g.lineWidth = Math.max(1.5, L.frame * 0.3);
-      g.shadowColor = '#C04BD8'; g.shadowBlur = this.reduced ? 0 : 14 * q;
+      // Build 8: the perimeter answers in the board's own cyan (restrained; stronger for bigger clears).
+      const gemLook = isGemStyle();
+      g.strokeStyle = rgba(gemLook ? THEME.pulse : '#E070D8', (gemLook ? 0.6 : 0.45) * q * this.animator.energyAmt); g.lineWidth = Math.max(1.5, L.frame * 0.3);
+      g.shadowColor = gemLook ? THEME.pulse : '#C04BD8'; g.shadowBlur = this.reduced ? 0 : 14 * q * (gemLook ? this.animator.energyAmt : 1);
       roundRect(g, x, y, w, w, rr); g.stroke();
       g.restore();
     }
@@ -1045,7 +1101,8 @@ export class GameView {
       const p = state.tray[i];
       const tutorialHidden = state.mode === 'tutorial' && this.tutorialTarget?.slot !== i;
       const empty = !p || tutorialHidden;
-      if (blockStyle() === 'b6') paintPedestal(g, r.x, r.y, r.w, r.h, empty ? 0 : 1);
+      if (blockStyle() === 'b8') paintPlatform8(g, r.x, r.y, r.w, r.h, empty ? 0 : 1);
+      else if (blockStyle() === 'b6') paintPedestal(g, r.x, r.y, r.w, r.h, empty ? 0 : 1);
       else paintFrame(g, r.x, r.y, r.w, r.h, 14, 4, false);
       if (empty) {
         // a faint dashed socket marks an empty slot

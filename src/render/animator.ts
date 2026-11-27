@@ -71,6 +71,8 @@ export class Animator {
   /** Build 6: soft light left in the cleared lines (fades after the shards), and the placement energy pulse. */
   afterglow: { cells: number[]; start: number; dur: number; strength: number; od: boolean } | null = null;
   placePulse: { cells: number[]; start: number; dur: number } | null = null;
+  /** Build 8: light travelling across individual crystals (placement catch-light; the view adds idle glints). */
+  glints: { k: number; start: number; dur: number; strength: number }[] = [];
   /** Build 6: last time the board released energy (the background and perimeter brighten briefly). */
   energyAt = -1e9; energyAmt = 0;
   /** Frame celebration: cyan for 4+ lines, champagne gold for a level-up. */
@@ -108,7 +110,7 @@ export class Animator {
   get active() {
     return this.busy || this.dying.length > 0 || this.particles.length > 0 || this.shocks.length > 0 || this.floats.length > 0
       || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0 || !!this.materialWave || this.arrivals.length > 0
-      || !!this.contact || !!this.perfectWave || !!this.odWave || !!this.flash || this.motes.length > 0 || !!this.afterglow || !!this.placePulse || this.odArrivals.length > 0;
+      || !!this.contact || !!this.perfectWave || !!this.odWave || !!this.flash || this.motes.length > 0 || !!this.afterglow || !!this.placePulse || this.odArrivals.length > 0 || this.glints.length > 0;
   }
 
   play(result: MoveResult, now: number, hooks: AnimationHooks, opts: PlayOptions = {}) {
@@ -120,6 +122,8 @@ export class Animator {
     const k = (this.reduced ? 0.65 : 1) * this.speed;
     const T = (ms: number) => now + ms * k;
     for (const p of result.placed) this.settles.set(p, now);
+    // Build 8: the placed crystals catch the light once they have settled (staggered along the piece).
+    if (!this.reduced) result.placed.forEach((p, i) => this.glints.push({ k: p, start: now + 110 + i * 22, dur: 420, strength: 1 }));
     this.odMove = !!opts.overdrive;
     // Contact highlight along the placed piece as it locks in (100–150 ms).
     this.contact = { cells: result.placed, start: now + 40, dur: 130 };
@@ -377,7 +381,8 @@ export class Animator {
 
   update(now: number, dt: number) {
     while (this.events.length && this.events[0].at <= now) this.events.shift()!.fn();
-    for (const [k, t0] of this.settles) if (now - t0 > 180) this.settles.delete(k);
+    for (const [k, t0] of this.settles) if (now - t0 > 200) this.settles.delete(k);
+    if (this.glints.length) this.glints = this.glints.filter((gl) => now < gl.start + gl.dur);
     this.dying = this.dying.filter((d) => now < d.start + d.dur);
     this.shocks = this.shocks.filter((s) => now < s.start + s.dur);
     this.charges = this.charges.filter((c) => now < c.start + c.dur + 40);

@@ -31,6 +31,13 @@ and glass perimeter, a layered reactor background, a shattering line clear with 
 the meter, refined sounds, tray pedestals, gold and cyan buttons, today's real puzzle on the Daily screen and an
 animated results screen. Rules, scoring and saves are unchanged. See `docs/BUILD6_REPORT.md`.
 
+Build 7 made the board the hero (about 93% of the width, a compact HUD, a practice round with no blank rows) and
+added a Blender pipeline for pre-rendered crystals (`tools/render/`). Build 8, **Premium Visual Refinement & Game
+Feel**, puts those renders in the game: path-traced **gemstones** (one per material) seated in a machined board
+of tiled compartments, a 95%-width board, a settle-and-glint placement, random glints, line-completion anticipation,
+gem-shard clears with graduated rewards, a crystalline cascade sound, graduated haptics and a gemstone energy core
+on the main menu. Rules, scoring and saves are unchanged. See `docs/BUILD8_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -60,7 +67,7 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 6" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 8" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.
