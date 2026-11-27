@@ -10,6 +10,7 @@
 import type { Board, Cell } from '../engine/board';
 import type { MoveResult } from '../engine/game';
 import type { PulseWave } from '../engine/pulse';
+import { setMaterial, type MaterialLook } from './blocks';
 
 export interface Dying { k: number; cell: Cell; start: number; dur: number; brightFrom: number }
 export interface Shock { r: number; c: number; start: number; dur: number; wave: number }
@@ -19,14 +20,27 @@ export interface Sweep { kind: 'row' | 'col'; i: number; origin: number; start: 
 export interface Flare { r: number; c: number; start: number; dur: number }
 export interface Particle { x: number; y: number; vx: number; vy: number; born: number; life: number; size: number; hue: 'ti' | 'cyan' | 'white'; spin: number }
 export interface FloatText { text: string; r: number; c: number; start: number; dur: number; big: boolean }
-export interface EnergyOrb { r: number; c: number; seg: number; start: number; dur: number }
+export interface EnergyOrb { r: number; c: number; seg: number; start: number; dur: number; gold?: boolean }
+/** Build 3: a material change sweeps across the board from `origin` (cell units). */
+export interface MaterialWave { from: MaterialLook; to: MaterialLook; start: number; dur: number; or: number; oc: number }
 
 export interface AnimationHooks {
   onLines?(result: MoveResult): void;
   onWave?(index: number, wave: PulseWave, result: MoveResult): void;
   /** An energy orb reached the meter (one per restored charge). */
   onEnergy?(seg: number): void;
+  /** Build 3: every clear and chain has finished and the move gained one or more levels. */
+  onLevelUp?(result: MoveResult): void;
   onDone?(result: MoveResult): void;
+}
+
+export interface PlayOptions {
+  /** Material change that comes with this move's level-up (progressive materials). */
+  material?: { from: MaterialLook; to: MaterialLook };
+  /** Level-up phase length in ms (700–1200, dev-tunable). */
+  levelMs?: number;
+  /** Material wave length in ms (400–700, dev-tunable). */
+  materialMs?: number;
 }
 
 export class Animator {
@@ -44,11 +58,14 @@ export class Animator {
   particles: Particle[] = [];
   floats: FloatText[] = [];
   orbs: EnergyOrb[] = [];
-  /** Frame celebration for 4+ lines. */
-  celebrate: { start: number; dur: number } | null = null;
+  /** Frame celebration: cyan for 4+ lines, champagne gold for a level-up. */
+  celebrate: { start: number; dur: number; gold?: boolean } | null = null;
+  materialWave: MaterialWave | null = null;
   shake: { start: number; dur: number; amp: number } | null = null;
   /** Restored charges still in flight to the meter (the meter shows state energy minus these). */
   pendingEnergy = 0;
+  /** Recent orb arrivals, for the meter's flash (gold for level-up energy). */
+  arrivals: { seg: number; t: number; gold: boolean }[] = [];
 
   reduced = false;
   showPoints = true;
@@ -56,6 +73,7 @@ export class Animator {
   particleScale = 1;
   /** Dev: multiplies clear timings (1 = single clear ~340 ms). */
   speed = 1;
+  /** Dev: energy wave intensity (sweeps, shockwaves, frame light). */
 
   private events: { at: number; fn: () => void }[] = [];
   private current: MoveResult | null = null;
@@ -65,10 +83,10 @@ export class Animator {
   /** True while anything is still moving on screen (keeps the render loop alive). */
   get active() {
     return this.busy || this.dying.length > 0 || this.particles.length > 0 || this.shocks.length > 0 || this.floats.length > 0
-      || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0;
+      || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0 || !!this.materialWave || this.arrivals.length > 0;
   }
 
-  play(result: MoveResult, now: number, hooks: AnimationHooks) {
+  play(result: MoveResult, now: number, hooks: AnimationHooks, opts: PlayOptions = {}) {
     this.finish(); // never overlap sequences
     this.current = result;
     this.hooks = hooks;
@@ -77,10 +95,12 @@ export class Animator {
     const k = (this.reduced ? 0.65 : 1) * this.speed;
     const T = (ms: number) => now + ms * k;
     for (const p of result.placed) this.settles.set(p, now);
+    // Restored charges stay off the meter until their energy arrives (lines first, then any level-up).
+    this.pendingEnergy = result.energyGained + (result.levelEnergy ?? 0);
 
     const lines = result.rows.length + result.cols.length;
     if (lines === 0) {
-      this.at(T(100), () => this.complete());
+      this.finishWith(result, T(100), now, opts);
       return;
     }
 
@@ -108,13 +128,12 @@ export class Animator {
       this.hooks.onLines?.(result);
       if (!this.reduced && lines >= 3) this.shake = { start: T(clearAt), dur: 220, amp: Math.min(1.5 + lines * 0.6, 4.5) };
       // energy orbs: one per restored charge, from the cleared lines to the meter segments that light up
-      const before = result.energyAfter - result.energyGained;
+      const before = (result.energyAfterLines ?? result.energyAfter) - result.energyGained;
       const sources = [...result.rows.map((r) => ({ r, c: midC })), ...result.cols.map((c) => ({ r: midR, c }))];
       for (let i = 0; i < result.energyGained; i++) {
         const src = sources[i % sources.length];
         const orb: EnergyOrb = { r: src.r, c: src.c, seg: before + i, start: T(clearAt) + i * 90, dur: 420 };
         this.orbs.push(orb);
-        this.pendingEnergy++;
       }
     });
 
@@ -138,11 +157,40 @@ export class Animator {
           }
         }
         this.hooks.onWave?.(i, wave, result);
+        // 4+ Pulse chains get the frame celebration too (audiovisual only; the blast radius never changes).
+        if (i === result.waves.length - 1 && result.chain >= 4) this.celebrate = { start: T(shockAt), dur: (result.chain >= 5 ? 950 : 750) * k };
         if (!this.reduced && (i >= 1 || wave.pulses.length > 1)) this.shake = { start: T(shockAt), dur: 200, amp: Math.min(1.5 + i * 1.2, 5) };
       });
       t = shockAt + 170;
     });
-    this.at(T(Math.max(t, clearAt + 150) + 80), () => this.complete());
+    this.finishWith(result, T(Math.max(t, clearAt + 150) + 80), now, opts);
+  }
+
+  /** Ends the sequence at `end`, or first plays the level-up phase when this move gained a level. */
+  private finishWith(result: MoveResult, end: number, now: number, opts: PlayOptions) {
+    const gained = (result.levelAfter ?? 1) > (result.levelBefore ?? 1);
+    if (!gained) { this.at(end, () => this.complete()); return; }
+    const k = this.reduced ? 0.6 : 1;
+    const levelMs = (opts.levelMs ?? 950) * k, matMs = (opts.materialMs ?? 560) * k;
+    const L0 = end;
+    this.at(L0, () => {
+      this.celebrate = { start: L0, dur: levelMs * 0.95, gold: true };
+      this.hooks.onLevelUp?.(result);
+      // Level-up energy: gold-and-cyan sparks from the top of the board into the meter.
+      const lvlE = result.levelEnergy ?? 0;
+      for (let i = 0; i < lvlE; i++) {
+        this.orbs.push({ r: -0.4, c: 2 + i * 1.5, seg: (result.energyAfterLines ?? 0) + i, start: L0 + 260 * k + i * 90, dur: 440 * k, gold: true });
+      }
+    });
+    let done = L0 + levelMs;
+    if (opts.material && opts.material.from.id !== opts.material.to.id) {
+      const m = opts.material;
+      const ws = L0 + 320 * k;
+      this.at(ws, () => { this.materialWave = { from: m.from, to: m.to, start: ws, dur: matMs, or: 3.5, oc: 3.5 }; });
+      done = Math.max(done, ws + matMs + 120 * k);
+    }
+    void now;
+    this.at(done, () => this.complete());
   }
 
   private at(at: number, fn: () => void) { this.events.push({ at, fn }); this.events.sort((a, b) => a.at - b.at); }
@@ -183,6 +231,7 @@ export class Animator {
     for (const o of this.orbs) this.hooks.onEnergy?.(o.seg);
     this.orbs = [];
     this.pendingEnergy = 0;
+    if (this.materialWave) { setMaterial(this.materialWave.to); this.materialWave = null; }
     this.complete();
   }
 
@@ -199,11 +248,14 @@ export class Animator {
     this.orbs = this.orbs.filter((o) => {
       if (now < o.start + o.dur) return true;
       this.pendingEnergy = Math.max(0, this.pendingEnergy - 1);
+      this.arrivals.push({ seg: o.seg, t: now, gold: !!o.gold });
       this.hooks.onEnergy?.(o.seg);
       return false;
     });
+    this.arrivals = this.arrivals.filter((a) => now < a.t + 1300);
     if (this.glowCells && now > this.glowCells.start + this.glowCells.dur) this.glowCells = null;
     if (this.celebrate && now > this.celebrate.start + this.celebrate.dur) this.celebrate = null;
+    if (this.materialWave && now > this.materialWave.start + this.materialWave.dur) { setMaterial(this.materialWave.to); this.materialWave = null; }
     if (this.shake && now > this.shake.start + this.shake.dur) this.shake = null;
     const s = Math.min(dt, 50) / 1000;
     this.particles = this.particles.filter((p) => {

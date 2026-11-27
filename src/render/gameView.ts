@@ -8,7 +8,7 @@ import type { Shape } from '../engine/pieces';
 import { playability, type Playability } from '../engine/rotation';
 import type { PlacementTarget } from '../game/session';
 import { Animator } from './animator';
-import { drawBlock, paintEmptyCell, paintFrame, roundRect, setRenderScale } from './blocks';
+import { drawBlock, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
 import { THEME, rgba } from './theme';
 
 export interface Layout {
@@ -76,10 +76,10 @@ export class GameView {
     setRenderScale(this.dpr);
 
     const side = 12;
-    // Board ~65% of the canvas (about 48% of the screen), meter ~8%, tray the rest.
-    const energyH = Math.max(34, Math.min(48, H * 0.075));
-    const minTray = Math.max(104, H * 0.24);
-    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.64));
+    // Board ~61% of the canvas, meter ~7%, tray the rest (Build 3: tray pieces 10–15% larger than Build 2).
+    const energyH = Math.max(34, Math.min(48, H * 0.072));
+    const minTray = Math.max(112, H * 0.29);
+    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.625));
     const frame = Math.max(6, boardPx * 0.026);
     const pad = frame + Math.max(3, boardPx * 0.008);
     const pitch = (boardPx - pad * 2) / 8;
@@ -90,11 +90,14 @@ export class GameView {
     const trayTop = energyY + energyH;
     const trayH = Math.max(90, H - trayTop - 4);
     const slotGap = Math.max(8, boardPx * 0.025);
-    const slotW = (boardPx - slotGap * 2) / 3;
-    const slotH = Math.min(trayH - 30, slotW * 1.05);
+    // The tray may run a little wider than the board (up to the screen gutter) so pieces can grow.
+    const trayW = Math.min(W - side * 2, boardPx * 1.14);
+    const trayLeft = (W - trayW) / 2;
+    const slotW = (trayW - slotGap * 2) / 3;
+    const slotH = Math.min(trayH - 28, slotW * 1.2);
     // Miniature cell size based on 3-cell spans (most pieces); longer pieces shrink only as far as they must.
-    const trayCell = Math.min(pitch * 0.72, (slotW * 0.88) / 3.2, ((slotH - ROTATE_OVERLAP) * 0.9) / 3);
-    this.layout = { W, H, bx, by, boardPx, frame, pad, pitch, cell: pitch - gap, gap, energyY, energyH, trayTop, trayH, slotW, slotH, slotGap, trayLeft: bx, trayCell };
+    const trayCell = Math.min(pitch * 0.8, (slotW * 0.92) / 3.2, ((slotH - ROTATE_OVERLAP) * 0.93) / 3);
+    this.layout = { W, H, bx, by, boardPx, frame, pad, pitch, cell: pitch - gap, gap, energyY, energyH, trayTop, trayH, slotW, slotH, slotGap, trayLeft, trayCell };
     this.boardBg = null;
   }
 
@@ -313,7 +316,7 @@ export class GameView {
       }
       if (willClear.has(k)) bright = Math.max(bright, 0.22);
       if (d?.blast.has(k)) bright = Math.max(bright, 0.18);
-      drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0) });
+      drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0), material: this.matAt(Math.floor(k / 8), k % 8, now) });
       if (d?.blast.has(k)) {
         g.strokeStyle = rgba(THEME.pulse, 0.85); g.lineWidth = 1.5; g.setLineDash([3, 3]);
         roundRect(g, x + 2, y + 2, L.cell - 4, L.cell - 4, L.cell * 0.14); g.stroke(); g.setLineDash([]);
@@ -374,12 +377,14 @@ export class GameView {
     const pos = (p * per * 1.2) % per;
     const pt = (d: number) => d < L.boardPx ? [L.bx + d, L.by] : d < 2 * L.boardPx ? [L.bx + L.boardPx, L.by + d - L.boardPx] : d < 3 * L.boardPx ? [L.bx + 3 * L.boardPx - d, L.by + L.boardPx] : [L.bx, L.by + 4 * L.boardPx - d];
     g.save();
-    g.strokeStyle = rgba(THEME.pulse, 0.5 * a); g.lineWidth = L.frame * 0.5;
+    const col = c.gold ? THEME.gold : THEME.pulse, core = c.gold ? '#FFF3D1' : THEME.pulseCore;
+    const W = visualParams().wave;
+    g.strokeStyle = rgba(col, Math.min(1, 0.5 * a * W)); g.lineWidth = L.frame * 0.5;
     roundRect(g, L.bx + L.frame * 0.3, L.by + L.frame * 0.3, L.boardPx - L.frame * 0.6, L.boardPx - L.frame * 0.6, L.pitch * 0.3); g.stroke();
     for (let i = 0; i < 4; i++) {
       const [x, y] = pt((pos + (i * per) / 4) % per);
       const rg = g.createRadialGradient(x, y, 0, x, y, L.pitch * 1.2);
-      rg.addColorStop(0, rgba(THEME.pulseCore, 0.8 * a)); rg.addColorStop(1, rgba(THEME.pulse, 0));
+      rg.addColorStop(0, rgba(core, Math.min(1, 0.8 * a * W))); rg.addColorStop(1, rgba(col, 0));
       g.fillStyle = rg; g.fillRect(x - L.pitch * 1.2, y - L.pitch * 1.2, L.pitch * 2.4, L.pitch * 2.4);
     }
     g.restore();
@@ -399,7 +404,7 @@ export class GameView {
         if (near <= 0) continue;
         const r = s.kind === 'row' ? s.i : i, c = s.kind === 'row' ? i : s.i;
         const { x, y } = this.cellXY(r, c);
-        g.fillStyle = rgba(THEME.pulseCore, near * (1 - p * 0.6) * Math.min(0.9, 0.5 * s.strength));
+        g.fillStyle = rgba(THEME.pulseCore, Math.min(1, near * (1 - p * 0.6) * Math.min(0.9, 0.5 * s.strength) * visualParams().wave));
         roundRect(g, x - 1, y - 1, L.cell + 2, L.cell + 2, L.cell * 0.18); g.fill();
       }
       // thin energy rail along the whole line
@@ -408,6 +413,23 @@ export class GameView {
       g.strokeStyle = rgba(THEME.pulse, 0.5 * (1 - p) * Math.min(1.5, s.strength));
       g.lineWidth = 1.5 + s.strength;
       g.beginPath(); g.moveTo(a.x + L.cell / 2, a.y + L.cell / 2); g.lineTo(b.x + L.cell / 2, b.y + L.cell / 2); g.stroke();
+    }
+
+    // Material transition: a bright front in the new material sweeps out from the centre of the board.
+    const mw = A.materialWave;
+    if (mw && now >= mw.start) {
+      const p = Math.min(1, (now - mw.start) / mw.dur);
+      const c0 = this.cellXY(mw.or, mw.oc);
+      const cx = c0.x + L.cell / 2, cy = c0.y + L.cell / 2;
+      const R = p * 1.1 * Math.hypot(4, 4) * L.pitch;
+      const band = L.pitch * 0.9;
+      g.save();
+      g.beginPath(); g.rect(L.bx + L.pad, L.by + L.pad, L.pitch * 8, L.pitch * 8); g.clip();
+      const rg = g.createRadialGradient(cx, cy, Math.max(0, R - band), cx, cy, R + band * 0.3);
+      const a = Math.min(1, 0.55 * visualParams().wave) * (1 - p * 0.5);
+      rg.addColorStop(0, rgba(mw.to.highlight, 0)); rg.addColorStop(0.75, rgba(mw.to.highlight, a)); rg.addColorStop(1, rgba(mw.to.color, 0));
+      g.fillStyle = rg; g.fillRect(L.bx, L.by, L.boardPx, L.boardPx);
+      g.restore();
     }
 
     // Intersection flares where a row and a column clear together.
@@ -487,7 +509,7 @@ export class GameView {
       const life = (now - p.born) / p.life;
       const px = L.bx + L.pad + p.x * L.pitch, py = L.by + L.pad + p.y * L.pitch;
       g.globalAlpha = Math.max(0, 1 - life);
-      g.fillStyle = p.hue === 'cyan' ? THEME.pulse : p.hue === 'white' ? THEME.pulseCore : THEME.titaniumHi;
+      g.fillStyle = p.hue === 'cyan' ? THEME.pulse : p.hue === 'white' ? THEME.pulseCore : currentMaterial().highlight;
       const s = p.size * L.pitch * (1 - life * 0.4);
       g.save(); g.translate(px, py); g.rotate(p.spin * life);
       g.fillRect(-s / 2, -s / 2, s, s);
@@ -519,8 +541,12 @@ export class GameView {
     const denied = now < this.denied + 500 ? 1 - (now - this.denied) / 500 : 0;
     g.font = `700 ${Math.round(Math.min(11, L.energyH * 0.27))}px ${FONT}`;
     g.textAlign = 'right'; g.textBaseline = 'middle';
-    const label = rc.mode === 'unlimited' ? 'ROTATION  ∞' : shown === 0 ? 'NO ENERGY' : 'ROTATION ENERGY';
-    g.fillStyle = denied > 0 ? THEME.invalid : shown === 0 && rc.mode === 'energy' ? rgba(THEME.textDim, 0.8) : THEME.textDim;
+    // "ENERGY FULL" for a moment after restored energy fills the meter.
+    const arr = this.animator.arrivals;
+    const justFull = rc.mode === 'energy' && shown >= max && arr.length > 0 && now < arr[arr.length - 1].t + 1200;
+    const goldFull = justFull && arr.some((a) => a.gold);
+    const label = rc.mode === 'unlimited' ? 'ROTATION  ∞' : shown === 0 ? 'NO ENERGY' : justFull ? 'ENERGY FULL' : 'ROTATION ENERGY';
+    g.fillStyle = denied > 0 ? THEME.invalid : justFull ? (goldFull ? THEME.gold : THEME.pulse) : shown === 0 && rc.mode === 'energy' ? rgba(THEME.textDim, 0.8) : THEME.textDim;
     if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '1.5px';
     g.fillText(label, s0.x - s0.w / 2 - 14 + (denied ? Math.sin(now * 0.08) * 3 * denied : 0), s0.y);
     if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
@@ -531,8 +557,12 @@ export class GameView {
       // recessed slot
       g.fillStyle = '#0A1119';
       roundRect(g, x - 2, y - 2, c.w + 4, c.h + 4, (c.h + 4) / 2); g.fill();
-      g.strokeStyle = rgba(THEME.gridBorder, 0.9); g.lineWidth = 1;
+      g.strokeStyle = i < shown ? rgba(THEME.pulse, 0.55) : '#3D5466'; g.lineWidth = 1.2;
       roundRect(g, x - 1.5, y - 1.5, c.w + 3, c.h + 3, (c.h + 3) / 2); g.stroke();
+      if (i >= shown) {
+        // depleted: a dark inset groove, clearly different from a charged cell
+        g.fillStyle = '#121C26'; roundRect(g, x + 1, y + 1, c.w - 2, c.h - 2, (c.h - 2) / 2); g.fill();
+      }
       let lit = i < shown ? 1 : 0;
       if (this.drain && this.drain.seg === i) {
         const p = (now - this.drain.start) / 260;
@@ -546,6 +576,19 @@ export class GameView {
         grad.addColorStop(0, THEME.pulseCore); grad.addColorStop(0.5, THEME.pulse); grad.addColorStop(1, '#2AA9B8');
         g.fillStyle = grad;
         roundRect(g, x, y, c.w, c.h, c.h / 2); g.fill();
+        g.fillStyle = 'rgba(255,255,255,0.55)';
+        roundRect(g, x + c.h * 0.4, y + 1, c.w - c.h * 0.8, Math.max(1, c.h * 0.22), 1); g.fill();
+        g.restore();
+      }
+      // Arrival flash: cyan for line energy, gold-and-cyan for level-up energy.
+      const hit = arr.find((a) => a.seg === i && now < a.t + 600);
+      if (hit && !this.reduced) {
+        const q = (now - hit.t) / 600;
+        g.save();
+        g.strokeStyle = rgba(hit.gold ? THEME.gold : THEME.pulseCore, 1 - q); g.lineWidth = 2;
+        g.shadowColor = hit.gold ? THEME.gold : THEME.pulse; g.shadowBlur = 12;
+        const grow = 3 + q * 5;
+        roundRect(g, x - grow, y - grow, c.w + grow * 2, c.h + grow * 2, (c.h + grow * 2) / 2); g.stroke();
         g.restore();
       }
       if (denied > 0) {
@@ -569,13 +612,23 @@ export class GameView {
       const y = (1 - e) * (1 - e) * fy + 2 * (1 - e) * e * my + e * e * to.y;
       const R = 7;
       const rg = g.createRadialGradient(x, y, 0, x, y, R * 2);
-      rg.addColorStop(0, rgba(THEME.pulseCore, 1)); rg.addColorStop(0.4, rgba(THEME.pulse, 0.8)); rg.addColorStop(1, rgba(THEME.pulse, 0));
+      // Level-up energy is champagne gold with a cyan halo; line energy is cyan.
+      rg.addColorStop(0, o.gold ? '#FFF6DC' : rgba(THEME.pulseCore, 1)); rg.addColorStop(0.4, o.gold ? rgba(THEME.gold, 0.9) : rgba(THEME.pulse, 0.8)); rg.addColorStop(1, rgba(THEME.pulse, 0));
       g.fillStyle = rg; g.fillRect(x - R * 2, y - R * 2, R * 4, R * 4);
     }
     void state;
   }
 
-  private drawPiece(piece: PieceInstance, shape: Shape, cx: number, cy: number, pitch: number, alpha: number, now: number, angle = 0) {
+  /** Material for a standard block at (r, c) while a material wave sweeps the board (undefined = current). */
+  private matAt(r: number, c: number, now: number): MaterialLook | undefined {
+    const w = this.animator.materialWave;
+    if (!w) return undefined;
+    const p = Math.max(0, (now - w.start) / w.dur);
+    const maxD = Math.hypot(4, 4);
+    return Math.hypot(r - w.or, c - w.oc) / maxD <= p * 1.1 ? w.to : w.from;
+  }
+
+  private drawPiece(piece: PieceInstance, shape: Shape, cx: number, cy: number, pitch: number, alpha: number, now: number, angle = 0, material?: MaterialLook) {
     const L = this.layout;
     const gapRatio = L.gap / L.pitch;
     const cell = pitch * (1 - gapRatio);
@@ -584,7 +637,7 @@ export class GameView {
     if (angle) { g.save(); g.translate(cx, cy); g.rotate(angle); g.translate(-cx, -cy); }
     shape.cells.forEach(([dr, dc], i) => {
       const x = cx - w / 2 + dc * pitch + (pitch - cell) / 2, y = cy - h / 2 + dr * pitch + (pitch - cell) / 2;
-      drawBlock(g, x, y, cell, piece.pulseIndex === i, now, this.reduced, { alpha });
+      drawBlock(g, x, y, cell, piece.pulseIndex === i, now, this.reduced, { alpha, material });
     });
     if (angle) g.restore();
   }
@@ -624,7 +677,10 @@ export class GameView {
         }
       }
       const c = this.pieceCenter(i);
-      this.drawPiece(p!, shape, c.x, c.y, this.trayCellFor(shape), alpha, now, angle);
+      // The tray changes material as the wave finishes crossing the board.
+      const mw = this.animator.materialWave;
+      const trayMat = mw ? ((now - mw.start) / mw.dur >= 0.85 ? mw.to : mw.from) : undefined;
+      this.drawPiece(p!, shape, c.x, c.y, this.trayCellFor(shape), alpha, now, angle, trayMat);
     }
   }
 

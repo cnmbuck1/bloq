@@ -10,6 +10,11 @@ Block they hit.
 Build 2 adds **Rotation Energy** (turn a tray piece 90° clockwise for one charge; every cleared line gives a
 charge back) and a new graphite, titanium and cyan look. See `docs/BUILD2_REPORT.md` for what changed.
 
+Build 3 adds **levels** (score thresholds with titles, endless past Level 15; each level-up restores Rotation
+Energy), **evolving materials** (six anodized-metal finishes unlocked for good as you reach levels 3, 5, 7, 9
+and 11), level-based piece difficulty, career statistics, 19 achievements, a richer results screen and share
+card. See `docs/BUILD3_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -39,13 +44,18 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 2" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 3" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.
 - **Pulse chance**, **clear timing**, **particle intensity** and **haptic intensity**, live.
-- **Scenarios**: 16 prepared boards, trays and energy levels (rotation, chains, edges, energy restore, game
-  over). Defined in `src/dev/scenarios.ts`.
+- **Level-up energy** (full / one / none), **level-up and material-wave length**, and the material look:
+  block brightness, reflectivity, edge highlight, Pulse glow and energy-wave intensity.
+- **Advanced JSON**: level thresholds, titles and endless formula, difficulty bands and cap, material colours
+  and unlock levels, and scoring, edited live and validated before they apply.
+- **Scenarios**: 19 Build 3 scenarios (levels, multi-level moves, unlocks, fixed material, level-up energy,
+  high-level generation, five-Pulse chain, multiple achievements, save/restore, beyond Level 15) and the 16
+  Build 2 ones. Some Build 3 scenarios rewrite parts of the local career (they say so). `src/dev/scenarios.ts`.
 - **Board editor**: tap cells to cycle empty, block, Pulse.
 - **Export analytics** as JSON, and reset all local data.
 
@@ -111,9 +121,13 @@ All in `src/engine/config.ts`, passed to the engine as one object.
 - **Pulse chance**: 12% of generated pieces, at most one per piece.
 - **Repetition control**: pieces from the last 6 generated are weighted ×0.45; a piece already in the tray
   being built is weighted ×0.2.
-- **Difficulty tiers** by score (0, 1,500, 5,000, 12,000): multipliers on piece-category weights. Early play
-  favours small pieces; later play brings more 3×3 squares, big Ls and 1×5s. This is visible and score-based,
-  not hidden manipulation.
+- **Difficulty by level** (`difficulty` in the config): the small / medium / large piece mix (1–2, 3–4, 5+
+  cells) is 40/45/15 at Levels 1–2, 30/50/20 at 3–4, 25/45/30 at 5–6, 20/45/35 at 7–8, 15/45/40 at 9–10 and
+  15/40/45 from Level 11 (the cap). A level-up changes only trays generated after it.
+- **Levels** (`progression`): 0, 1,000, 2,500, 4,500, 7,000, 10,000, 13,500, 17,500, 22,000, 27,000, 32,500,
+  38,500, 45,000, 52,000, 59,500; past Level 15 each gap grows by 500. Level-up restores energy to full.
+- **Materials** (`materials`): Magenta L1, Electric Violet L3, Emerald L5, Solar Amber L7, Crimson L9,
+  Quantum Platinum L11. Pulse Blocks always stay cyan.
 - **Fairness**: when a tray is generated, if no chosen piece fits but some library piece does, one slot is
   swapped for a fitting piece (still weighted). Nothing promises all three stay playable.
 

@@ -2,13 +2,17 @@
 // haptics, persistence and analytics.
 
 import { drawOrbIcon } from './brand/cnmbuck-orb';
-import { DEFAULT_CONFIG, type GameConfig, type RotationMode } from './engine/config';
+import { DEFAULT_CONFIG, type GameConfig, type LevelUpEnergy, type MaterialDef, type RotationMode } from './engine/config';
+import { levelProgress, levelThreshold, levelTitle } from './engine/progression';
 import { newGame, stateIsOver, type GameState, type MoveResult } from './engine/game';
 import { inspectSave, serializeGame } from './engine/save';
 import { rotationCost } from './engine/rotation';
 import { SCENARIOS } from './dev/scenarios';
 import { boardFromArt } from './game/boardArt';
 import { GameSession } from './game/session';
+import {
+  ACHIEVEMENTS, achievementProgress, activeMaterial, grantProgress, nextMilestone, type AchievementDef, type AchievementIcon,
+} from './game/achievements';
 import { loadSettings, saveSettings, type Settings } from './game/settings';
 import {
   addPlayTime, averageRotations, averageScore, averageSessionMs, parseStats, recordGameEnd, recordMove, recordRotation,
@@ -20,9 +24,9 @@ import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } f
 import { setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
-import { setHighContrast } from './render/blocks';
+import { DEFAULT_VISUALS, currentMaterial, setHighContrast, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
-import { paintHomeArt, paintLogoCanvas, paintSplash, renderShareCard } from './ui/art';
+import { paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderShareCard, type ShareInfo } from './ui/art';
 import { InputController } from './ui/input';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -37,16 +41,35 @@ const newSeed = () => (Math.random() * 2 ** 32) >>> 0;
 interface DevConfig {
   rotationMode: RotationMode; startCharges: number; maxCharges: number; cost: number; energyPerLine: number;
   pulseChance: number; clearMs: number; particles: 'low' | 'medium' | 'high'; haptic: HapticIntensity;
+  // Build 3
+  levelUpEnergy: LevelUpEnergy; levelMs: number; materialMs: number; visuals: VisualParams;
+  /** Advanced overrides (progression, difficulty, materials, scoring), edited as JSON. */
+  advanced: Partial<Pick<GameConfig, 'progression' | 'difficulty' | 'materials' | 'scoring'>>;
 }
 const DEV_KEY = 'bloq.dev';
+
+const svg = (d: string) => `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">${d}</svg>`;
+const ACH_ICONS: Record<AchievementIcon, string> = {
+  line: svg('<rect x="3" y="10" width="18" height="4.5" rx="1.2" fill="currentColor"/>'),
+  rotate: svg('<path d="M18 8.5A7 7 0 1 0 19 13" stroke="currentColor" stroke-width="2.3" fill="none" stroke-linecap="round"/><path d="M19.5 4v5h-5" stroke="currentColor" stroke-width="2.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>'),
+  pulse: svg('<rect x="5" y="5" width="14" height="14" rx="3" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="3" fill="currentColor"/>'),
+  chain: svg('<circle cx="6" cy="12" r="3" fill="currentColor"/><circle cx="18" cy="12" r="3" fill="currentColor"/><circle cx="12" cy="12" r="2" fill="currentColor" opacity=".6"/>'),
+  clear: svg('<rect x="3" y="5" width="18" height="3.5" rx="1" fill="currentColor"/><rect x="3" y="10.25" width="18" height="3.5" rx="1" fill="currentColor"/><rect x="3" y="15.5" width="18" height="3.5" rx="1" fill="currentColor" opacity=".5"/>'),
+  combo: svg('<path d="M13 3 5 13.5h6L10 21l8-10.5h-6z" fill="currentColor"/>'),
+  level: svg('<path d="M12 4 20 12h-5v8H9v-8H4z" fill="currentColor"/>'),
+  games: svg('<rect x="4" y="4" width="7" height="7" rx="1.5" fill="currentColor"/><rect x="13" y="4" width="7" height="7" rx="1.5" fill="currentColor" opacity=".6"/><rect x="4" y="13" width="7" height="7" rx="1.5" fill="currentColor" opacity=".6"/><rect x="13" y="13" width="7" height="7" rx="1.5" fill="currentColor"/>'),
+  points: svg('<path d="m12 3 2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6L3.3 9.3l6.1-.7z" fill="currentColor"/>'),
+  material: svg('<path d="M12 3 21 8v8l-9 5-9-5V8z" fill="none" stroke="currentColor" stroke-width="2"/><path d="m3 8 9 5 9-5M12 13v8" stroke="currentColor" stroke-width="1.6" fill="none"/>'),
+};
 const defaultDev = (): DevConfig => ({
   rotationMode: DEFAULT_CONFIG.rotation.mode, startCharges: DEFAULT_CONFIG.rotation.startCharges, maxCharges: DEFAULT_CONFIG.rotation.maxCharges,
   cost: DEFAULT_CONFIG.rotation.cost, energyPerLine: DEFAULT_CONFIG.rotation.energyPerLine, pulseChance: DEFAULT_CONFIG.generation.pulseChance,
   clearMs: 340, particles: 'medium', haptic: 'medium',
+  levelUpEnergy: DEFAULT_CONFIG.progression.levelUpEnergy, levelMs: 950, materialMs: 560, visuals: { ...DEFAULT_VISUALS }, advanced: {},
 });
 
 type ScreenId = 'splash' | 'home' | 'game';
-type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings';
+type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials';
 
 export class App {
   private cfg: GameConfig = structuredClone(DEFAULT_CONFIG);
@@ -68,7 +91,15 @@ export class App {
   private gamesThisSession = 0;
   /** Slots whose current piece the player rotated (for analytics). */
   private rotatedSlots = new Set<number>();
-  private lastResultInfo: { score: number; best: number; combo: number; chain: number; lines: number; newRecord: boolean } | null = null;
+  private lastResultInfo: ShareInfo | null = null;
+  // Build 3 progression
+  /** Level shown in the HUD (catches up with the state when the level-up celebration plays). */
+  private displayedLevel = 1;
+  private highestLevelAtStart = 1;
+  private levelStartedMs = 0;
+  private levelStartedMoves = 0;
+  /** What this game earned for the first time (results screen). */
+  private earned = { materials: [] as MaterialDef[], achievements: [] as AchievementDef[], chainRecord: false };
 
   private tutorialIndex = -1;
   private editMode = false;
@@ -76,7 +107,7 @@ export class App {
 
   private raf = 0;
   private lastFrame = 0;
-  private messageQueue: { text: string; kind: string }[] = [];
+  private messageQueue: { text: string; kind: string; sub: string[] }[] = [];
   private messageTimer: ReturnType<typeof setTimeout> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private rotateBtns: HTMLButtonElement[];
@@ -157,7 +188,10 @@ export class App {
     og.setTransform(1, 0, 0, 1, 0, 0); og.clearRect(0, 0, orb.width, orb.height);
     drawOrbIcon(og, orb.width, 0, 0, 0, false);
     $('homeBest').innerHTML = this.stats.bestScore > 0 ? `PERSONAL BEST <b>${fmt(this.stats.bestScore)}</b>` : '';
+    $('homeLevel').innerHTML = this.stats.highestLevel > 1
+      ? `HIGHEST LEVEL <b>${this.stats.highestLevel}</b> · ${levelTitle(this.cfg.progression, this.stats.highestLevel).toUpperCase()}` : '';
     $('btnContinue').hidden = !inspectSave(load(KEYS.save), this.cfg).data;
+    this.applyMaterial(this.stats.highestLevel);
   }
 
   /** Build 1 saves migrate; anything that can't be restored is cleared with an explanation. Records are kept. */
@@ -183,7 +217,15 @@ export class App {
     $('btnGameSettings').hidden = false;
     $('scores').style.visibility = '';
     $('status').style.visibility = '';
+    $('levelHud').style.visibility = '';
     this.session = new GameSession(state ?? newGame(newSeed(), this.cfg), this.cfg);
+    const lvl = this.session.state.level ?? 1;
+    this.displayedLevel = lvl;
+    this.highestLevelAtStart = this.stats.highestLevel;
+    this.levelStartedMs = restore?.elapsedMs ?? 0;
+    this.levelStartedMoves = this.session.state.stats.moves;
+    this.earned = { materials: [], achievements: [], chainRecord: false };
+    this.applyMaterial(lvl);
     this.rotatedSlots.clear();
     this.elapsedMs = restore?.elapsedMs ?? 0;
     this.bestAtStart = restore?.bestAtStart ?? this.stats.bestScore;
@@ -195,7 +237,7 @@ export class App {
     this.setCombo(this.session.state.combo, false);
     $('chain').classList.remove('on');
     this.show('game');
-    if (!restore) track('game_started', { seed: this.session.state.seed, rotationMode: this.cfg.rotation.mode });
+    if (!restore) track('game_started', { seed: this.session.state.seed, rotationMode: this.cfg.rotation.mode, gameInSession: this.gamesThisSession + 1 });
     this.persist();
     if (this.session.state.over) setTimeout(() => this.gameOver(), 600);
   }
@@ -245,6 +287,7 @@ export class App {
       this.rotatedSlots.add(slot);
       track('rotation_performed', { piece: piece.defId, cost: out.cost, energyLeft: out.state.energy });
       this.stats = recordRotation(this.stats, out.cost);
+      this.grant();
       this.persist();
     }
     this.refreshRotateButtons();
@@ -268,9 +311,23 @@ export class App {
       if (result.newTray) this.rotatedSlots.clear(); else this.rotatedSlots.delete(slot);
       if (lines) track('lines_cleared', { count: lines, combo: result.combo, energyGained: result.energyGained });
       if (result.chain) { track('pulse_activated', { count: result.chain }); track('chain_size', { size: result.chain }); }
-      this.stats = recordMove(this.stats, result);
+      const st = this.session.state;
+      this.stats = recordMove(this.stats, result, { seed: st.seed, moves: st.stats.moves });
+      if (result.chain >= 2 && result.chain > this.chainRecordAtStart && this.chainRecordAtStart > 0) this.earned.chainRecord = true;
+      if (result.levelAfter > result.levelBefore) {
+        for (let L = result.levelBefore + 1; L <= result.levelAfter; L++) {
+          track('level_reached', { level: L, ms: Math.round(this.elapsedMs - this.levelStartedMs), placements: st.stats.moves - this.levelStartedMoves, score: result.scoreAfter });
+        }
+        this.levelStartedMs = this.elapsedMs; this.levelStartedMoves = st.stats.moves;
+        if (result.levelEnergy > 0) track('energy_restored_level_up', { amount: result.levelEnergy, level: result.levelAfter });
+      }
+      // Unlocks and achievements are granted and saved now, before any animation, so nothing can be lost or doubled.
+      this.grant({ quiet: true });
       this.persist();
     }
+    // A level-up in progressive mode may bring a new material: the wave plays after the celebration starts.
+    const fromMat = currentMaterial();
+    const toMat = tutorial ? fromMat : activeMaterial(this.cfg, this.stats, result.levelAfter);
     const A = this.view.animator;
     A.reduced = this.settings.reducedMotion;
     A.showPoints = !tutorial;
@@ -292,8 +349,9 @@ export class App {
         if (i === r.waves.length - 1) this.celebrate(r, 'chain');
       },
       onEnergy: (seg) => { sfx.energy(seg); this.refreshRotateButtons(); this.wake(); },
+      onLevelUp: (r) => this.levelUp(r, fromMat.id !== toMat.id ? this.cfg.materials.find((m) => m.id === toMat.id) ?? null : null),
       onDone: (r) => this.afterResolution(r),
-    });
+    }, { material: fromMat.id !== toMat.id ? { from: fromMat, to: toMat } : undefined, levelMs: this.dev.levelMs, materialMs: this.dev.materialMs });
     if (lines === 0) {
       this.displayedScore = tutorial ? 0 : result.scoreAfter;
       this.updateHud();
@@ -314,6 +372,8 @@ export class App {
       setTimeout(() => this.nextTutorialStep(), (this.settings.reducedMotion ? 350 : 700) + (step?.outro ? 700 : 0));
       return;
     }
+    this.flushProgressNotices();
+    if (r.levelAfter === r.levelBefore) this.contextTip(r);
     if (r.gameOver) {
       remove(KEYS.save);
       setTimeout(() => this.gameOver(), 650);
@@ -329,23 +389,139 @@ export class App {
       if (lines >= 4) out.push([lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big']);
       else if (lines === 3) out.push(['TRIPLE CLEAR', 'big']);
       else if (lines === 2) out.push(['DOUBLE CLEAR', '']);
-      else if (r.combo >= 3) out.push(['GREAT MOVE', '']);
+      // Top multiplier reached (and every move it holds there): 3.0× with the default table.
+      if (r.combo === this.cfg.scoring.comboMultipliers.length) out.push(['MASSIVE COMBO ×' + Math.max(...this.cfg.scoring.comboMultipliers).toFixed(1), 'big']);
+      else if (lines < 2 && r.combo >= 3) out.push(['GREAT MOVE', '']);
     }
     if (phase === 'chain') {
       const c = r.chain;
-      out.push([c >= 5 ? `MASSIVE REACTION ×${c}` : c >= 3 ? `CHAIN REACTION ×${c}` : c === 2 ? 'DOUBLE PULSE' : 'PULSE ACTIVATED', c >= 2 ? 'big' : '']);
+      // PERFECT REACTION: the chain cleared every block left on the board.
+      const perfect = c >= 2 && r.boardAfterPlace.cells.every((cell, k) => !cell || r.lineCells.includes(k) || r.waves.some((w) => w.cleared.includes(k)));
+      out.push([perfect ? `PERFECT REACTION ×${c}` : c >= 5 ? `MASSIVE REACTION ×${c}` : c >= 3 ? `CHAIN REACTION ×${c}` : c === 2 ? 'DOUBLE PULSE' : 'PULSE ACTIVATED', c >= 2 ? 'big' : '']);
       if (!tutorial && c >= 2 && c > this.chainRecordAtStart && this.chainRecordAtStart > 0) { out.push(['NEW CHAIN RECORD', 'record']); this.chainRecordAtStart = c; }
+      if (c >= 4) sfx.majorChain(c);
     }
     const last = phase === 'chain' || r.chain === 0;
     if (last && !tutorial) {
       const boardClear = r.boardAfterPlace.cells.every((c, k) => !c || r.lineCells.includes(k) || r.waves.some((w) => w.cleared.includes(k)));
-      if (boardClear) out.push(['BOARD CLEAR', 'big']);
+      if (boardClear && r.chain < 2) out.push(['BOARD CLEAR', 'big']);
       if (!this.celebratedBest && this.bestAtStart > 0 && r.scoreAfter > this.bestAtStart) {
         this.celebratedBest = true;
         out.push(['NEW PERSONAL BEST', 'record']);
       }
     }
     for (const [text, kind] of out) this.message(text, kind);
+  }
+
+  // ---------------------------------------------------------------- Build 3 progression
+
+  /** Sets the standard-block material for a level (progressive) or the player's fixed choice. */
+  private applyMaterial(level: number) {
+    const m = activeMaterial(this.cfg, this.stats, level);
+    setMaterial(m);
+    this.materialCss(m);
+  }
+
+  /** Interface accents (level bar, unlock banner) follow the current material. */
+  private materialCss(m: MaterialDef) {
+    const root = document.documentElement.style;
+    root.setProperty('--mat', m.color); root.setProperty('--mat-hi', m.highlight); root.setProperty('--mat-lo', m.shadow);
+  }
+
+  private pendingNotices: { materials: MaterialDef[]; achievements: AchievementDef[] } = { materials: [], achievements: [] };
+
+  /** Grants newly earned materials and achievements, saves them at once, and queues their notices. */
+  private grant(opts: { quiet?: boolean } = {}) {
+    const g = grantProgress(this.stats, this.cfg);
+    if (!g.newMaterials.length && !g.newAchievements.length) return;
+    this.stats = g.stats;
+    store(KEYS.stats, JSON.stringify(this.stats));
+    for (const m of g.newMaterials) track('material_unlocked', { material: m.id, level: this.session.state.level });
+    for (const a of g.newAchievements) track('achievement_unlocked', { id: a.id });
+    this.earned.materials.push(...g.newMaterials);
+    this.earned.achievements.push(...g.newAchievements);
+    this.pendingNotices.materials.push(...g.newMaterials);
+    this.pendingNotices.achievements.push(...g.newAchievements);
+    if (!opts.quiet) this.flushProgressNotices();
+  }
+
+  /** Material unlocks get the message banner; achievements share one quiet toast. */
+  private flushProgressNotices() {
+    const { materials, achievements } = this.pendingNotices;
+    this.pendingNotices = { materials: [], achievements: [] };
+    for (const m of materials) {
+      this.message('NEW MATERIAL UNLOCKED', 'unlock', [m.name.toUpperCase()]);
+      sfx.unlock(); haptic('unlock');
+    }
+    if (achievements.length) {
+      const text = achievements.length === 1 ? `Achievement: ${achievements[0].name}` : `${achievements.length} achievements: ${achievements.map((a) => a.name).join(', ')}`;
+      // Wait for a showing banner (level-up, unlock) so the toast never covers it.
+      const busy = this.messageTimer !== null || this.messageQueue.length > 0;
+      setTimeout(() => { this.toast(text, 'achv'); sfx.achievement(); }, materials.length ? 900 : busy ? 1400 : 0);
+    }
+    if (materials.length) this.tip('unlock', 'Unlocked materials stay yours. Choose one any time in Materials.', 2600);
+  }
+
+  /** One consolidated celebration, however many levels this move gained. */
+  private levelUp(r: MoveResult, newMaterial: MaterialDef | null) {
+    this.displayedLevel = r.levelAfter;
+    this.updateLevelHud();
+    const el = $('levelHud');
+    el.classList.remove('up'); void el.offsetWidth; el.classList.add('up');
+    const gained = r.levelAfter - r.levelBefore;
+    const sub = [`LEVEL ${r.levelAfter} — ${levelTitle(this.cfg.progression, r.levelAfter).toUpperCase()}`];
+    if (r.levelEnergy > 0) sub.push(this.cfg.progression.levelUpEnergy === 'full' ? 'ROTATION ENERGY RESTORED' : `+${r.levelEnergy} ROTATION ENERGY`);
+    // A permanent unlock earned by this level-up joins the one celebration instead of a separate banner.
+    const unlocked = this.pendingNotices.materials.splice(0);
+    for (const m of unlocked) sub.push(`NEW MATERIAL UNLOCKED: ${m.name.toUpperCase()}`);
+    sub.push(`NEXT: ${fmt(levelThreshold(this.cfg.progression, r.levelAfter + 1))} FOR LEVEL ${r.levelAfter + 1}`);
+    if (unlocked.length) { setTimeout(() => { sfx.unlock(); haptic('unlock'); }, 600); this.tip('unlock', 'Unlocked materials stay yours. Choose one any time in Materials.', 6500); }
+    this.clearMessages();
+    this.message(gained > 1 ? `LEVEL UP ×${gained}` : 'LEVEL UP', 'lvlup', sub);
+    sfx.levelUp(); haptic('levelup');
+    if (r.levelEnergy > 0) setTimeout(() => sfx.recharge(), 420);
+    if (newMaterial) { this.materialCss(newMaterial); setTimeout(() => sfx.materialSweep(), 320); track('material_tier_reached', { material: newMaterial.id, level: r.levelAfter }); }
+    // Contextual teaching for the first level-up and the first material change.
+    if (newMaterial && this.tip('material', `New material: ${newMaterial.name}. Colour shows your progress; it never needs matching.`, 2100)) return;
+    this.tip('levelup', 'Level up! Your energy refills and new pieces get a little tougher.', 2100);
+  }
+
+  /** Shows a one-time contextual tip (saved so it never repeats). Returns whether it showed. */
+  private tip(id: string, text: string, delay = 0): boolean {
+    if (this.session.state.mode !== 'classic' || this.stats.tipsSeen.includes(id)) return false;
+    this.stats = { ...this.stats, tipsSeen: [...this.stats.tipsSeen, id] };
+    store(KEYS.stats, JSON.stringify(this.stats));
+    // Tips wait for any showing banner so they never cover a celebration.
+    const show = (tries: number) => {
+      if (tries > 0 && (this.messageTimer !== null || this.messageQueue.length > 0)) setTimeout(() => show(tries - 1), 350);
+      else this.toast(text, 'tip');
+    };
+    setTimeout(() => show(12), delay);
+    return true;
+  }
+
+  /** After the first line ever: explain the level bar. */
+  private contextTip(r: MoveResult) {
+    if (r.rows.length + r.cols.length > 0) this.tip('progress', `Points fill the level bar. Reach ${fmt(levelProgress(this.cfg.progression, r.scoreAfter).next)} for Level 2.`);
+  }
+
+  /** Level row: title, score against the next threshold, a bar relative to this level's own start. */
+  private updateLevelHud() {
+    const P = this.cfg.progression;
+    const score = this.displayedScore, level = this.displayedLevel;
+    const start = levelThreshold(P, level), next = levelThreshold(P, level + 1);
+    // Once the score crosses the threshold the bar holds full until the level-up celebration plays.
+    const full = score >= next;
+    const fraction = Math.max(0, Math.min(1, (score - start) / Math.max(1, next - start)));
+    $('levelNum').textContent = `LEVEL ${level}`;
+    $('levelTitle').textContent = levelTitle(P, level).toUpperCase();
+    $('levelPts').innerHTML = `<b>${fmt(score)}</b> / ${fmt(next)}`;
+    $('levelLeft').textContent = full ? 'LEVEL UP' : `${fmt(next - score)} points to Level ${level + 1}`;
+    $<HTMLElement>('levelFill').style.width = `${(fraction * 100).toFixed(1)}%`;
+    const el = $('levelHud');
+    el.classList.toggle('near', fraction >= 0.8);
+    el.classList.toggle('full', full);
+    el.setAttribute('aria-label', `Level ${level}, ${levelTitle(P, level)}. ${fmt(score)} of ${fmt(next)} points. ${fmt(Math.max(0, next - score))} to go.`);
   }
 
   private gameOver() {
@@ -356,13 +532,37 @@ export class App {
     this.unbankedMs = 0;
     store(KEYS.stats, JSON.stringify(this.stats));
     const occupancy = st.board.cells.filter(Boolean).length;
-    track('game_ended', { score: st.score, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs), occupancy, energyLeft: st.energy, rotations: st.stats.rotations, gameInSession: this.gamesThisSession });
+    track('game_ended', { score: st.score, level: st.level, material: currentMaterial().id, moves: st.stats.moves, lines: st.stats.linesCleared, ms: Math.round(this.elapsedMs), occupancy, energyLeft: st.energy, rotations: st.stats.rotations, gameInSession: this.gamesThisSession });
     const newRecord = st.score > prevBest && st.score > 0;
     sfx.gameOver(); haptic(newRecord ? 'record' : 'clear');
     if (newRecord) setTimeout(() => sfx.record(), 500);
-    this.lastResultInfo = { score: st.score, best: this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord };
-    $('resKicker').textContent = newRecord ? 'NEW PERSONAL BEST' : 'GAME OVER';
-    $('resKicker').classList.toggle('record', newRecord);
+    // Accomplishments, most significant first (the first one is highlighted).
+    const level = st.level ?? 1;
+    const levelRecord = level > this.highestLevelAtStart;
+    const acc: [string, string][] = [];
+    if (newRecord) acc.push(['NEW PERSONAL BEST', '']);
+    if (levelRecord && level > 1) acc.push(['NEW LEVEL RECORD', '']);
+    for (const m of this.earned.materials) acc.push([`${m.name.toUpperCase()} UNLOCKED`, 'mat']);
+    if (this.earned.achievements.length) acc.push([this.earned.achievements.length === 1 ? `NEW ACHIEVEMENT · ${this.earned.achievements[0].name.toUpperCase()}` : `${this.earned.achievements.length} NEW ACHIEVEMENTS`, '']);
+    if (this.earned.chainRecord) acc.push(['NEW CHAIN RECORD', '']);
+    $('resAcc').innerHTML = acc.map(([t, k], i) => `<li class="${[k, i === 0 ? 'top' : ''].join(' ').trim()}">${t}</li>`).join('');
+    $('resAcc').hidden = !acc.length;
+    const title = levelTitle(this.cfg.progression, level);
+    $('resLevel').innerHTML = `LEVEL <b>${level}</b> — <b>${title.toUpperCase()}</b>`;
+    $('resLvl').textContent = String(level);
+    $('resLvlBest').textContent = String(this.stats.highestLevel);
+    const next = nextMilestone(this.stats, this.cfg);
+    $('resNext').innerHTML = next ? `Next: <b>${next}</b>` : '';
+    const kicker = newRecord ? 'NEW PERSONAL BEST' : levelRecord && level > 1 ? 'NEW LEVEL RECORD' : 'GAME OVER';
+    const mat = activeMaterial(this.cfg, this.stats, level);
+    const message = level >= 10 ? `I reached ${title}. How far can you go?`
+      : this.earned.chainRecord && st.stats.maxChain >= 3 ? 'My biggest chain reaction yet.'
+      : levelRecord && level >= 3 ? `I reached Level ${level}. How far can you go?`
+      : level >= 7 ? 'Can you become a Quantum Master?'
+      : 'Can you beat my score?';
+    this.lastResultInfo = { score: st.score, best: this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord, level, title, material: mat, message };
+    $('resKicker').textContent = kicker;
+    $('resKicker').classList.toggle('record', kicker !== 'GAME OVER');
     $('resScore').textContent = fmt(st.score);
     $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(this.stats.bestScore)}`;
     $('resLines').textContent = fmt(st.stats.linesCleared);
@@ -373,6 +573,7 @@ export class App {
     $('resRot').textContent = fmt(st.stats.rotations);
     $('resTime').textContent = fmtTime(this.elapsedMs);
     this.view.fade = 1;
+    $('toast').classList.remove('on');
     this.openOverlay('results');
   }
 
@@ -396,6 +597,8 @@ export class App {
     $('btnGameSettings').hidden = true;
     $('scores').style.visibility = 'hidden';
     $('status').style.visibility = 'hidden';
+    $('levelHud').style.visibility = 'hidden';
+    setMaterial(this.cfg.materials[0]);
     this.displayedScore = 0;
     this.updateHud(true);
     this.setCombo(0, false);
@@ -453,6 +656,7 @@ export class App {
     const best = Math.max(this.stats.bestScore, live);
     $('best').textContent = fmt(best);
     $('best').classList.toggle('record', live > 0 && live >= this.bestAtStart && live === best && this.bestAtStart > 0);
+    this.updateLevelHud();
   }
 
   private setCombo(combo: number, animate: boolean) {
@@ -474,8 +678,8 @@ export class App {
   }
 
   /** Messages queue so two never overwrite each other. */
-  private message(text: string, kind = '') {
-    this.messageQueue.push({ text, kind });
+  private message(text: string, kind = '', sub: string[] = []) {
+    this.messageQueue.push({ text, kind, sub });
     if (!this.messageTimer) this.nextMessage();
   }
 
@@ -491,6 +695,11 @@ export class App {
     const m = this.messageQueue.shift();
     if (!m) { el.className = 'message'; this.messageTimer = null; return; }
     el.textContent = m.text;
+    for (const line of m.sub) {
+      const sm = document.createElement('small'); sm.textContent = line;
+      sm.className = line.startsWith('NEW MATERIAL') ? 'u' : line.startsWith('NEXT') ? 'n' : line.includes('ENERGY') ? 'e' : '';
+      el.appendChild(sm);
+    }
     el.className = 'message';
     void el.offsetWidth;
     el.className = `message on ${m.kind}`;
@@ -498,15 +707,15 @@ export class App {
     this.messageTimer = setTimeout(() => {
       el.className = `message ${m.kind}`;
       this.messageTimer = setTimeout(() => this.nextMessage(), 180);
-    }, m.kind ? 1150 : 900);
+    }, m.kind === 'lvlup' ? (m.sub.length > 3 ? 1900 : 1500) : m.kind ? 1150 : 900);
   }
 
-  private toast(text: string) {
+  private toast(text: string, kind = '') {
     const el = $('toast');
     el.textContent = text;
-    el.classList.add('on');
+    el.className = `toast on ${kind}`;
     if (this.toastTimer) clearTimeout(this.toastTimer);
-    this.toastTimer = setTimeout(() => el.classList.remove('on'), 3200);
+    this.toastTimer = setTimeout(() => el.classList.remove('on'), kind === 'tip' ? 4200 : 3200);
   }
 
   /** Rotate buttons sit on the bottom edge of each tray slot; their state follows energy and playability. */
@@ -586,12 +795,15 @@ export class App {
     const s = this.stats;
     const rows: [string, string][] = [
       ['Personal best', fmt(s.bestScore)],
+      ['Highest level', `${s.highestLevel} · ${levelTitle(this.cfg.progression, s.highestLevel)}`],
+      ['Lifetime points', fmt(s.lifetimePoints)],
+      ['Materials unlocked', `${s.unlockedMaterials.length} / ${this.cfg.materials.length}`],
       ['Games played', fmt(s.gamesPlayed)],
       ['Average score', fmt(averageScore(s))],
       ['Average game', fmtTime(averageSessionMs(s))],
       ['Lines cleared', fmt(s.totalLines)],
       ['Largest clear', fmt(s.maxLinesAtOnce)],
-      ['Longest combo', s.maxCombo ? `${s.maxCombo} moves` : '–'],
+      ['Longest combo', s.maxCombo ? `${s.maxCombo} move${s.maxCombo === 1 ? '' : 's'}` : '–'],
       ['Biggest chain', s.maxChain ? `×${s.maxChain}` : '–'],
       ['Pulses activated', fmt(s.totalPulses)],
       ['Rotations', fmt(s.totalRotations)],
@@ -602,6 +814,79 @@ export class App {
       ['Days played', fmt(s.days.length)],
     ];
     $('statGrid').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    this.renderAchievements();
+  }
+
+  private statsTab(which: 'stats' | 'ach') {
+    const a = which === 'ach';
+    $('tabStats').classList.toggle('on', !a); $('tabStats').setAttribute('aria-selected', String(!a));
+    $('tabAch').classList.toggle('on', a); $('tabAch').setAttribute('aria-selected', String(a));
+    $('statsPane').hidden = a; $('achPane').hidden = !a;
+  }
+
+  private renderAchievements() {
+    const s = this.stats;
+    let done = 0;
+    $('achList').innerHTML = ACHIEVEMENTS.map((a) => {
+      const p = achievementProgress(a, s, this.cfg);
+      if (p.done) done++;
+      const pct = p.done ? 100 : Math.round((p.value / p.target) * 100);
+      const status = p.done ? 'DONE' : a.target > 1 ? `${a.target >= 10000 ? fmt(p.value) : p.value} / ${fmt(a.target)}` : '';
+      return `<li class="ach${p.done ? ' done' : ''}"><span class="ico">${ACH_ICONS[a.icon]}</span>`
+        + `<div><div class="nm">${a.name}</div><div class="ds">${a.description}</div>${p.done ? '' : `<div class="pg"><i style="width:${pct}%"></i></div>`}</div>`
+        + `<span class="st">${status}</span></li>`;
+    }).join('');
+    $('achCount').textContent = `${done}/${ACHIEVEMENTS.length}`;
+  }
+
+  /** Materials: Progressive follows the level; Fixed uses any unlocked material. Selections save at once. */
+  private renderMaterials() {
+    const s = this.stats;
+    const fixed = s.materialMode === 'fixed';
+    $('matProgressive').setAttribute('aria-checked', String(!fixed));
+    $('matFixed').setAttribute('aria-checked', String(fixed));
+    $('matNote').textContent = fixed
+      ? 'Your chosen material is used at every level. Pulse Blocks always stay cyan.'
+      : 'Blocks evolve with your level in every game. Reach new levels to unlock materials for good.';
+    const list = $('matList');
+    list.innerHTML = '';
+    for (const m of this.cfg.materials) {
+      const unlocked = s.unlockedMaterials.includes(m.id);
+      const selected = fixed && s.fixedMaterial === m.id;
+      const li = document.createElement('li');
+      li.className = `mat${unlocked ? '' : ' locked'}${selected ? ' sel' : ''}`;
+      const cv = document.createElement('canvas');
+      li.appendChild(cv);
+      const range = this.materialRange(m);
+      li.insertAdjacentHTML('beforeend', `<div><div class="nm">${m.name}</div><div class="ds">${unlocked ? `Levels ${range}` : `Reach Level ${m.minLevel} to unlock`}</div></div>`);
+      const b = document.createElement('button');
+      b.textContent = !unlocked ? 'LOCKED' : selected ? 'IN USE' : 'USE';
+      b.disabled = !unlocked;
+      b.setAttribute('aria-pressed', String(selected));
+      b.setAttribute('aria-label', unlocked ? `Use ${m.name}` : `${m.name}, locked. Reach Level ${m.minLevel}.`);
+      b.addEventListener('click', () => this.selectMaterial('fixed', m.id));
+      li.appendChild(b);
+      list.appendChild(li);
+      requestAnimationFrame(() => paintMaterialSwatch(cv, m, !unlocked));
+    }
+  }
+
+  private materialRange(m: MaterialDef): string {
+    const mats = this.cfg.materials, i = mats.indexOf(m);
+    const next = mats[i + 1];
+    return next ? (next.minLevel - 1 > m.minLevel ? `${m.minLevel}–${next.minLevel - 1}` : `${m.minLevel}`) : `${m.minLevel}+`;
+  }
+
+  private selectMaterial(mode: 'progressive' | 'fixed', id?: string) {
+    const s = this.stats;
+    const fixedMaterial = id ?? (s.unlockedMaterials.includes(s.fixedMaterial) ? s.fixedMaterial : s.unlockedMaterials[s.unlockedMaterials.length - 1]);
+    this.stats = { ...s, materialMode: mode, fixedMaterial };
+    store(KEYS.stats, JSON.stringify(this.stats));
+    track('material_selected', { mode, material: mode === 'fixed' ? fixedMaterial : 'progressive' });
+    haptic('select'); sfx.select();
+    this.renderMaterials();
+    this.applyMaterial(this.screen === 'game' ? this.session.state.level ?? 1 : this.stats.highestLevel);
+    this.wake();
   }
 
   // ---------------------------------------------------------------- dev tools (never in release builds)
@@ -617,6 +902,12 @@ export class App {
     r.mode = d.rotationMode; r.startCharges = d.startCharges; r.maxCharges = Math.max(1, d.maxCharges);
     r.cost = d.cost; r.energyPerLine = d.energyPerLine;
     this.cfg.generation.pulseChance = d.pulseChance;
+    // Advanced overrides replace whole sections; anything not overridden returns to the defaults.
+    for (const k of ['progression', 'difficulty', 'materials', 'scoring'] as const) {
+      (this.cfg as unknown as Record<string, unknown>)[k] = structuredClone(d.advanced[k] ?? DEFAULT_CONFIG[k]);
+    }
+    this.cfg.progression.levelUpEnergy = d.levelUpEnergy;
+    setVisualParams(d.visuals);
     if (this.view) {
       this.view.animator.speed = d.clearMs / 340;
       this.view.animator.particleScale = { low: 0.5, medium: 1, high: 1.6 }[d.particles];
@@ -646,7 +937,10 @@ export class App {
     $('devSection').hidden = !this.devEnabled;
     if (!this.devEnabled) return;
     const sel = $<HTMLSelectElement>('devScenario');
-    if (!sel.options.length) sel.innerHTML = SCENARIOS.map((s, i) => `<option value="${i}">${s.name}</option>`).join('');
+    if (!sel.options.length) {
+      const groups = [...new Set(SCENARIOS.map((s) => s.group ?? ''))];
+      sel.innerHTML = groups.map((g) => `<optgroup label="${g}">${SCENARIOS.map((s, i) => (s.group ?? '') === g ? `<option value="${i}">${s.name}</option>` : '').join('')}</optgroup>`).join('');
+    }
     const d = this.dev;
     $<HTMLSelectElement>('devRotMode').value = d.rotationMode;
     $<HTMLInputElement>('devStart').value = String(d.startCharges);
@@ -659,6 +953,17 @@ export class App {
     $('devClearOut').textContent = `${d.clearMs} ms`;
     $<HTMLSelectElement>('devParticles').value = d.particles;
     $<HTMLSelectElement>('devHaptic').value = d.haptic;
+    $<HTMLSelectElement>('devLevelEnergy').value = d.levelUpEnergy;
+    const range = (id: string, v: number, label: string) => { $<HTMLInputElement>(id).value = String(v); $(`${id}Out`).textContent = label; };
+    range('devLevelMs', d.levelMs, `${d.levelMs} ms`);
+    range('devMatMs', d.materialMs, `${d.materialMs} ms`);
+    range('devBright', d.visuals.brightness, d.visuals.brightness.toFixed(2));
+    range('devRefl', d.visuals.reflectivity, d.visuals.reflectivity.toFixed(1));
+    range('devEdge', d.visuals.edge, d.visuals.edge.toFixed(1));
+    range('devGlow', d.visuals.pulseGlow, d.visuals.pulseGlow.toFixed(1));
+    range('devWave', d.visuals.wave, d.visuals.wave.toFixed(1));
+    const c = this.cfg;
+    $<HTMLTextAreaElement>('devJson').value = JSON.stringify({ progression: c.progression, difficulty: c.difficulty, materials: c.materials, scoring: c.scoring }, null, 1);
   }
 
   private bindDev() {
@@ -682,16 +987,56 @@ export class App {
       $('devClearOut').textContent = `${this.dev.clearMs} ms`;
       this.saveDev();
     });
+    $<HTMLSelectElement>('devLevelEnergy').addEventListener('change', (e) => { this.dev.levelUpEnergy = (e.target as HTMLSelectElement).value as LevelUpEnergy; this.saveDev(); this.setupDev(); });
+    const slide = (id: string, set: (v: number) => void) => $<HTMLInputElement>(id).addEventListener('input', (e) => {
+      set(Number((e.target as HTMLInputElement).value));
+      this.saveDev(); this.setupDev();
+    });
+    slide('devLevelMs', (v) => { this.dev.levelMs = v; });
+    slide('devMatMs', (v) => { this.dev.materialMs = v; });
+    const vis = (k: keyof VisualParams) => (v: number) => { this.dev.visuals = { ...this.dev.visuals, [k]: v }; };
+    slide('devBright', vis('brightness')); slide('devRefl', vis('reflectivity')); slide('devEdge', vis('edge'));
+    slide('devGlow', vis('pulseGlow')); slide('devWave', vis('wave'));
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', fn);
+    on('devJsonApply', () => {
+      try {
+        const j = JSON.parse($<HTMLTextAreaElement>('devJson').value);
+        const adv: DevConfig['advanced'] = {};
+        if (j.progression) {
+          const t = j.progression.thresholds;
+          if (!Array.isArray(t) || t.length < 2 || t[0] !== 0 || t.some((x: number, i: number) => i > 0 && !(x > t[i - 1]))) throw new Error('thresholds must start at 0 and rise');
+          adv.progression = { ...DEFAULT_CONFIG.progression, ...j.progression };
+        }
+        if (j.difficulty) {
+          if (!Array.isArray(j.difficulty.bands) || !j.difficulty.bands.length) throw new Error('difficulty.bands is required');
+          adv.difficulty = { ...DEFAULT_CONFIG.difficulty, ...j.difficulty };
+        }
+        if (j.materials) {
+          if (!Array.isArray(j.materials) || !j.materials.length || j.materials.some((m: MaterialDef) => !m.id || !/^#[0-9a-f]{6}$/i.test(m.color))) throw new Error('each material needs an id and a #rrggbb color');
+          adv.materials = j.materials;
+        }
+        if (j.scoring) adv.scoring = { ...DEFAULT_CONFIG.scoring, ...j.scoring };
+        // Keep only the sections that differ from the defaults.
+        for (const k of Object.keys(adv) as (keyof typeof adv)[]) if (JSON.stringify(adv[k]) === JSON.stringify(DEFAULT_CONFIG[k])) delete adv[k];
+        this.dev.advanced = adv;
+        if (adv.progression?.levelUpEnergy) this.dev.levelUpEnergy = adv.progression.levelUpEnergy;
+        this.saveDev(); this.setupDev();
+        this.toast(Object.keys(adv).length ? `Applied: ${Object.keys(adv).join(', ')}` : 'All sections at defaults');
+      } catch (err) {
+        this.toast(`JSON not applied: ${(err as Error).message}`);
+      }
+    });
+    on('devJsonReset', () => { this.dev.advanced = {}; this.saveDev(); this.setupDev(); this.toast('Advanced settings reset'); });
     on('devLoad', () => {
       const sc = SCENARIOS[Number($<HTMLSelectElement>('devScenario').value)];
-      const base = newGame(newSeed(), this.cfg, { board: boardFromArt(sc.board), energy: sc.energy });
-      const state: GameState = { ...base, tray: sc.tray.map((p) => (p ? { ...p } : null)), energy: sc.energy };
+      if (sc.career) { this.stats = { ...this.stats, ...structuredClone(sc.career) }; store(KEYS.stats, JSON.stringify(this.stats)); }
+      const base = newGame(newSeed(), this.cfg, { board: boardFromArt(sc.board), energy: sc.energy, score: sc.score });
+      const state: GameState = { ...base, tray: sc.tray.map((p) => (p ? { ...p } : null)), energy: sc.energy, combo: sc.combo ?? 0 };
       state.over = stateIsOver(state, this.cfg);
       this.overlayReturn = null;
       this.closeOverlay(); this.closeOverlay();
       this.startClassic(state);
-      this.toast(`Scenario: ${sc.name}`);
+      this.toast(sc.hint ? `${sc.name}: ${sc.hint}` : `Scenario: ${sc.name}`, 'tip');
     });
     on('devEdit', () => {
       this.overlayReturn = null;
@@ -724,7 +1069,12 @@ export class App {
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());
-    on('btnStats', () => { this.renderStats(); this.openOverlay('stats'); });
+    on('btnStats', () => { this.renderStats(); this.statsTab('stats'); this.openOverlay('stats'); });
+    on('tabStats', () => this.statsTab('stats'));
+    on('tabAch', () => this.statsTab('ach'));
+    on('btnMaterials', () => { this.renderMaterials(); this.openOverlay('materials'); });
+    on('matProgressive', () => this.selectMaterial('progressive'));
+    on('matFixed', () => this.selectMaterial('fixed'));
     on('btnHow', () => this.openOverlay('how'));
     on('btnSettings', () => { this.setupDev(); this.openOverlay('settings'); });
     on('btnGameSettings', () => { this.view.animator.finish(); this.persist(); this.setupDev(); this.openOverlay('settings'); });
@@ -786,9 +1136,9 @@ export class App {
 
   private async share() {
     if (!this.lastResultInfo) return;
-    track('share_selected');
+    track('share_selected', { level: this.lastResultInfo.level, message: this.lastResultInfo.message });
     const card = renderShareCard(this.lastResultInfo);
-    const outcome = await shareImage(card, `I scored ${fmt(this.lastResultInfo.score)} in BLOQ. Can you beat my score?`);
+    const outcome = await shareImage(card, `I scored ${fmt(this.lastResultInfo.score)} in BLOQ and reached Level ${this.lastResultInfo.level}. ${this.lastResultInfo.message}`);
     if (outcome === 'downloaded') this.toast('Result image saved');
   }
 

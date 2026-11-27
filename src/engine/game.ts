@@ -1,5 +1,6 @@
 // The Classic Mode game: one immutable state and one pure move function.
-// applyMove computes the whole resolution (placement, lines, pulse waves, score, new tray, game over)
+// applyMove computes the whole resolution (placement, lines, pulse waves, score, combo, line energy, level-up and its
+// energy, new tray at the new level's difficulty, game over)
 // in one step and returns a new state. Animations replay the returned MoveResult; they never touch state,
 // so an interrupted or skipped animation cannot corrupt the board.
 
@@ -13,6 +14,7 @@ import { isGameOverWithRotation, rotated, rotationAllowed, rotationCost } from '
 import { resolvePulses, type PulseWave } from './pulse';
 import { Rng } from './rng';
 import { scoreMove, type ScoreBreakdown } from './scoring';
+import { levelForScore } from './progression';
 
 export type GameMode = 'classic' | 'tutorial';
 
@@ -27,6 +29,8 @@ export interface GameStats {
   rotations: number;
   energySpent: number;
   energyEarned: number;
+  /** Build 3: energy restored by level-ups. */
+  energyFromLevels: number;
 }
 
 export interface GameState {
@@ -42,6 +46,8 @@ export interface GameState {
   combo: number;
   /** Rotation Energy charges available. */
   energy: number;
+  /** Build 3: current level (1-based). Only ever rises within a game. The tutorial stays at 1. */
+  level: number;
   stats: GameStats;
   over: boolean;
   /** Pulse chance override (tutorial / tests). undefined = config. */
@@ -67,7 +73,13 @@ export interface MoveResult {
   scoreAfter: number;
   /** Rotation Energy restored by this move's completed lines (after the cap). */
   energyGained: number;
+  /** Energy after line restores, before any level-up restore. */
+  energyAfterLines: number;
+  /** Energy restored by this move's level-up (0 when no level was gained). */
+  levelEnergy: number;
   energyAfter: number;
+  levelBefore: number;
+  levelAfter: number;
   newTray: boolean;
   gameOver: boolean;
 }
@@ -82,7 +94,7 @@ export type RotateOutcome =
 
 export const freshStats = (): GameStats => ({
   moves: 0, linesCleared: 0, maxLinesAtOnce: 0, maxCombo: 0, pulsesActivated: 0, maxChain: 0, blocksPlaced: 0,
-  rotations: 0, energySpent: 0, energyEarned: 0,
+  rotations: 0, energySpent: 0, energyEarned: 0, energyFromLevels: 0,
 });
 
 /** Rotation-aware game over for a state. */
@@ -90,13 +102,17 @@ export function stateIsOver(s: Pick<GameState, 'board' | 'tray' | 'energy'>, cfg
   return isGameOverWithRotation(cfg.rotation, s.board, s.tray, s.energy);
 }
 
-export function newGame(seed: number, cfg: GameConfig = DEFAULT_CONFIG, opts: { board?: Board; pulseChance?: number; mode?: GameMode; energy?: number } = {}): GameState {
+export function newGame(seed: number, cfg: GameConfig = DEFAULT_CONFIG, opts: { board?: Board; pulseChance?: number; mode?: GameMode; energy?: number; score?: number } = {}): GameState {
   const rng = new Rng(seed);
   const board = opts.board ?? emptyBoard(cfg.boardSize);
   const energy = opts.energy ?? cfg.rotation.startCharges;
-  const { tray, recent } = generateTray(cfg, board, rng, { score: 0, recent: [], pulseChance: opts.pulseChance, energy });
+  const mode = opts.mode ?? 'classic';
+  // A starting score (developer scenarios) starts at the level that score has reached.
+  const score = opts.score ?? 0;
+  const level = mode === 'classic' ? levelForScore(cfg.progression, score) : 1;
+  const { tray, recent } = generateTray(cfg, board, rng, { score, level, recent: [], pulseChance: opts.pulseChance, energy });
   const state: GameState = {
-    mode: opts.mode ?? 'classic', seed, rngState: rng.state, board, tray, recent, score: 0, combo: 0, energy,
+    mode, seed, rngState: rng.state, board, tray, recent, score, combo: 0, energy, level,
     stats: freshStats(), over: false, pulseChance: opts.pulseChance,
   };
   state.over = stateIsOver(state, cfg);
@@ -146,15 +162,26 @@ export function applyMove(state: GameState, slot: number, row: number, col: numb
   const energy = rc.mode === 'energy' ? Math.min(rc.maxCharges, state.energy + lineCount * rc.energyPerLine) : state.energy;
   const energyGained = energy - state.energy;
 
+  const score = state.score + points.total;
+  // Build 3: level-ups are evaluated after the whole score is in. Several levels in one move restore energy once.
+  const levelBefore = state.level ?? 1;
+  const levelAfter = state.mode === 'classic' ? Math.max(levelBefore, levelForScore(cfg.progression, score)) : levelBefore;
+  let energyAfter = energy;
+  if (levelAfter > levelBefore && rc.mode === 'energy') {
+    const lu = cfg.progression.levelUpEnergy;
+    energyAfter = lu === 'full' ? Math.max(energy, rc.maxCharges) : lu === 'one' ? Math.min(rc.maxCharges, energy + 1) : energy;
+  }
+  const levelEnergy = energyAfter - energy;
+
   let tray = state.tray.slice();
   tray[slot] = null;
   let recent = state.recent;
   let rngState = state.rngState;
-  const score = state.score + points.total;
   const newTray = tray.every((p) => !p);
   if (newTray) {
+    // The new level's difficulty only reaches trays generated from now on.
     const rng = new Rng(rngState);
-    const gen = generateTray(cfg, board, rng, { score, recent, pulseChance: state.pulseChance, energy });
+    const gen = generateTray(cfg, board, rng, { score, level: levelAfter, recent, pulseChance: state.pulseChance, energy: energyAfter });
     tray = gen.tray; recent = gen.recent; rngState = rng.state;
   }
 
@@ -170,10 +197,11 @@ export function applyMove(state: GameState, slot: number, row: number, col: numb
     rotations: s.rotations ?? 0,
     energySpent: s.energySpent ?? 0,
     energyEarned: (s.energyEarned ?? 0) + energyGained,
+    energyFromLevels: (s.energyFromLevels ?? 0) + levelEnergy,
   };
   // Game over is checked on the fully resolved board, after every clear, chain and energy restore,
   // against every remaining piece in every orientation the player can afford.
-  const next: GameState = { ...state, board, tray, recent, rngState, score, combo, energy, stats, over: false };
+  const next: GameState = { ...state, board, tray, recent, rngState, score, combo, energy: energyAfter, level: levelAfter, stats, over: false };
   const over = stateIsOver(next, cfg);
   next.over = over;
 
@@ -183,7 +211,7 @@ export function applyMove(state: GameState, slot: number, row: number, col: numb
     result: {
       slot, piece, row, col, placed, boardAfterPlace: afterPlace, rows, cols, lineCells: lines,
       waves: pulse.waves, chain: pulse.activated, points, combo, scoreBefore: state.score, scoreAfter: score,
-      energyGained, energyAfter: energy, newTray, gameOver: over,
+      energyGained, energyAfterLines: energy, levelEnergy, energyAfter, levelBefore, levelAfter, newTray, gameOver: over,
     },
   };
 }

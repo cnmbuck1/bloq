@@ -15,8 +15,9 @@ const byName = (n: string) => {
 };
 
 describe('developer scenarios', () => {
-  it('has the 16 scenarios, each well formed', () => {
-    expect(SCENARIOS).toHaveLength(16);
+  it('has the 16 Build 2 and 19 Build 3 scenarios, each well formed', () => {
+    expect(SCENARIOS.filter((s) => s.group === 'Build 2')).toHaveLength(16);
+    expect(SCENARIOS.filter((s) => s.group === 'Build 3')).toHaveLength(19);
     for (const s of SCENARIOS) {
       expect(s.board, s.name).toHaveLength(8);
       for (const row of s.board) expect(row, s.name).toMatch(/^[.XP]{8}$/);

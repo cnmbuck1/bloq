@@ -18,11 +18,51 @@ export interface ScoringConfig {
   comboMultipliers: number[];
 }
 
-export interface DifficultyTier {
-  /** Tier applies once the current score reaches this value. */
-  minScore: number;
-  /** Multiplier on each category's base weight. Missing categories use 1. */
+/** Build 3: piece mix by level. Shares are relative (they needn't add to 1). */
+export interface DifficultyBand {
+  /** Band applies from this level up (until the next band). */
+  minLevel: number;
+  /** 1–2 cell pieces. */
+  small: number;
+  /** 3–4 cell pieces. */
+  medium: number;
+  /** 5+ cell pieces. */
+  large: number;
+}
+
+export interface DifficultyConfig {
+  /** Sorted by minLevel ascending; the first band must start at level 1. */
+  bands: DifficultyBand[];
+  /** Difficulty stops rising past this level (levels keep counting). */
+  maxLevel: number;
+  /** Optional nudges on top of the size mix, per category (1 = neutral). */
   categoryWeights: Partial<Record<PieceCategory, number>>;
+}
+
+export type LevelUpEnergy = 'full' | 'one' | 'none';
+
+export interface ProgressionConfig {
+  /** Cumulative score needed for each level; index 0 is level 1 (always 0). */
+  thresholds: number[];
+  /** Title per level, same indexing as thresholds. */
+  titles: string[];
+  /** Past the table, each level's gap grows by this much more than the previous gap. */
+  extraGapStep: number;
+  /** Past the table, titles read `${beyondTitle} ${roman(level - beyondTitleOffset)}`. */
+  beyondTitle: string;
+  beyondTitleOffset: number;
+  /** Rotation Energy restored when a level is gained (once per move, however many levels). */
+  levelUpEnergy: LevelUpEnergy;
+}
+
+export interface MaterialDef {
+  id: string;
+  name: string;
+  color: string;
+  highlight: string;
+  shadow: string;
+  /** Progressive mode uses this material from this level; reaching it also unlocks it for good. */
+  minLevel: number;
 }
 
 export interface GenerationConfig {
@@ -34,8 +74,6 @@ export interface GenerationConfig {
   recentPenalty: number;
   /** Weight multiplier for a piece already in the tray being generated. */
   sameTrayPenalty: number;
-  /** Difficulty tiers, sorted by minScore ascending. */
-  tiers: DifficultyTier[];
 }
 
 export type RotationMode = 'none' | 'unlimited' | 'energy';
@@ -56,16 +94,17 @@ export interface RotationConfig {
 export interface GameConfig {
   boardSize: number;
   traySize: number;
-  colors: number;
   scoring: ScoringConfig;
   generation: GenerationConfig;
   rotation: RotationConfig;
+  progression: ProgressionConfig;
+  difficulty: DifficultyConfig;
+  materials: MaterialDef[];
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
   boardSize: 8,
   traySize: 3,
-  colors: 5,
   scoring: {
     perBlockPlaced: 1,
     linePoints: [0, 100, 250, 450, 700],
@@ -79,15 +118,6 @@ export const DEFAULT_CONFIG: GameConfig = {
     recentWindow: 6,
     recentPenalty: 0.45,
     sameTrayPenalty: 0.2,
-    tiers: [
-      // Opening: friendlier small pieces and lines.
-      { minScore: 0, categoryWeights: { single: 1.3, line2: 1.3, line3: 1.2, smallL: 1.2, line5: 0.6, square3: 0.5, bigL: 0.6 } },
-      // Mid game: the neutral library weights.
-      { minScore: 1500, categoryWeights: {} },
-      // Late game: chunkier pieces show up more often, so planning matters more.
-      { minScore: 5000, categoryWeights: { single: 0.7, line2: 0.8, line5: 1.25, square3: 1.3, bigL: 1.3, sz: 1.15 } },
-      { minScore: 12000, categoryWeights: { single: 0.55, line2: 0.7, line5: 1.4, square3: 1.5, bigL: 1.45, sz: 1.25, t: 1.15 } },
-    ],
   },
   rotation: {
     mode: 'energy',
@@ -97,4 +127,35 @@ export const DEFAULT_CONFIG: GameConfig = {
     energyPerLine: 1,
     animMs: 180,
   },
+  progression: {
+    thresholds: [0, 1000, 2500, 4500, 7000, 10000, 13500, 17500, 22000, 27000, 32500, 38500, 45000, 52000, 59500],
+    titles: [
+      'Initiate', 'Operator', 'Technician', 'Specialist', 'Strategist', 'Architect', 'Engineer', 'Mastermind', 'Elite',
+      'Quantum Master', 'Quantum Master II', 'Quantum Master III', 'Quantum Master IV', 'Quantum Master V', 'Quantum Master VI',
+    ],
+    extraGapStep: 500,
+    beyondTitle: 'Quantum Master',
+    beyondTitleOffset: 9,
+    levelUpEnergy: 'full',
+  },
+  difficulty: {
+    bands: [
+      { minLevel: 1, small: 40, medium: 45, large: 15 },
+      { minLevel: 3, small: 30, medium: 50, large: 20 },
+      { minLevel: 5, small: 25, medium: 45, large: 30 },
+      { minLevel: 7, small: 20, medium: 45, large: 35 },
+      { minLevel: 9, small: 15, medium: 45, large: 40 },
+      { minLevel: 11, small: 15, medium: 40, large: 45 },
+    ],
+    maxLevel: 11,
+    categoryWeights: {},
+  },
+  materials: [
+    { id: 'magenta', name: 'Magenta', color: '#D936AD', highlight: '#FF9BEA', shadow: '#64164F', minLevel: 1 },
+    { id: 'violet', name: 'Electric Violet', color: '#8855E8', highlight: '#CDB3FF', shadow: '#33186E', minLevel: 3 },
+    { id: 'emerald', name: 'Emerald', color: '#19BC91', highlight: '#94F7D9', shadow: '#08513F', minLevel: 5 },
+    { id: 'amber', name: 'Solar Amber', color: '#E6A32D', highlight: '#FFDE96', shadow: '#6A420C', minLevel: 7 },
+    { id: 'crimson', name: 'Crimson', color: '#E34268', highlight: '#FFA6BA', shadow: '#681127', minLevel: 9 },
+    { id: 'platinum', name: 'Quantum Platinum', color: '#C3D5E5', highlight: '#FFFFFF', shadow: '#4F6273', minLevel: 11 },
+  ],
 };

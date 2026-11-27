@@ -1,18 +1,22 @@
 // Fair piece generation.
-// - Weighted random selection, with difficulty tiers that change weights by score (visible, documented, not hidden).
+// - Weighted random selection. Build 3: the mix of small (1–2 cells), medium (3–4) and large (5+) pieces follows
+//   the player's level (config.difficulty), capped at a maximum level. Visible, documented, not hidden.
 // - Repetition control: pieces seen recently or already in this tray are less likely.
 // - Guarantee: if any library piece fits the board, at least one tray piece fits.
 //   Nothing guarantees all three stay playable after the player's own choices.
 // - Uses only the seeded Rng, so a seed + game state reproduces the same tray.
 
-import type { GameConfig, DifficultyTier } from './config';
+import type { GameConfig } from './config';
 import type { Board, PieceInstance } from './board';
 import { playability } from './rotation';
+import { bandFor, sizeClass } from './progression';
 import { PIECES, type PieceDef } from './pieces';
 import type { Rng } from './rng';
 
 export interface GenerateContext {
   score: number;
+  /** Current level (Build 3 difficulty). Defaults to 1. */
+  level?: number;
   /** Recently generated piece ids, oldest first. */
   recent: string[];
   /** Override for pulse chance (the tutorial uses 0; tests use 0 or 1). */
@@ -21,18 +25,18 @@ export interface GenerateContext {
   energy?: number;
 }
 
-export function tierFor(cfg: GameConfig, score: number): DifficultyTier {
-  let tier = cfg.generation.tiers[0];
-  for (const t of cfg.generation.tiers) if (score >= t.minScore) tier = t;
-  return tier;
-}
-
 function weightsFor(cfg: GameConfig, pool: readonly PieceDef[], ctx: GenerateContext, inTray: string[]): number[] {
-  const tier = tierFor(cfg, ctx.score);
+  const band = bandFor(cfg, ctx.level ?? 1);
   const g = cfg.generation;
+  const nudge = cfg.difficulty.categoryWeights;
+  // Each size class gets its band share, spread over its pieces by their base weights.
+  const classTotal = { small: 0, medium: 0, large: 0 };
+  for (const p of pool) classTotal[sizeClass(p.cells.length)] += p.weight;
   const recent = new Set(ctx.recent.slice(-g.recentWindow));
   return pool.map((p) => {
-    let w = p.weight * (tier.categoryWeights[p.category] ?? 1);
+    const c = sizeClass(p.cells.length);
+    let w = (band[c] * p.weight) / Math.max(1e-9, classTotal[c]);
+    w *= nudge[p.category] ?? 1;
     if (recent.has(p.id)) w *= g.recentPenalty;
     if (inTray.includes(p.id)) w *= g.sameTrayPenalty;
     return w;

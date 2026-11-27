@@ -140,6 +140,47 @@ export const sfx = {
     if (!ready()) return;
     [0, 3, 5, 7, 10].forEach((n, i) => { tone(LADDER[n], i * 0.07, 0.4, { type: 'triangle', gain: 0.07 }); metal(LADDER[n] / 2, i * 0.07, 0.1, 0.02); });
   },
+  // ---- Build 3 progression sounds
+  /** Level bar moved: a quiet electronic tick. */
+  progress() { if (!ready()) return; tone(1760, 0, 0.05, { type: 'sine', gain: 0.025 }); },
+  /** Level up: a rising energy sequence ending on a bright chord. */
+  levelUp() {
+    if (!ready()) return;
+    noise(0, 0.55, 0.05, 400, 6000, 1.4);
+    [0, 2, 4, 5, 7].forEach((n, i) => tone(LADDER[n], i * 0.06, 0.3, { type: 'triangle', gain: 0.065, to: LADDER[n] * 1.01 }));
+    [5, 7, 9].forEach((n) => tone(LADDER[n], 0.34, 0.75, { type: 'sine', gain: 0.06 }));
+    metal(LADDER[5] / 2, 0.34, 0.25, 0.03);
+  },
+  /** Material transition: a smooth sweep across the board. */
+  materialSweep() {
+    if (!ready()) return;
+    noise(0, 0.6, 0.06, 300, 4500, 0.9);
+    tone(220, 0, 0.6, { type: 'sawtooth', gain: 0.025, to: 660, filter: 1800 });
+  },
+  /** Rotation Energy fully restored by a level-up. */
+  recharge() {
+    if (!ready()) return;
+    tone(330, 0, 0.32, { type: 'sine', gain: 0.07, to: 990 });
+    tone(990, 0.3, 0.18, { type: 'sine', gain: 0.05 });
+  },
+  /** A material unlocked for good. */
+  unlock() {
+    if (!ready()) return;
+    [7, 9, 10].forEach((n, i) => { tone(LADDER[n], i * 0.09, 0.55, { type: 'triangle', gain: 0.06 }); metal(LADDER[n], i * 0.09, 0.12, 0.02); });
+  },
+  /** An achievement: short and celebratory, never loud. */
+  achievement() {
+    if (!ready()) return;
+    tone(LADDER[5], 0, 0.14, { type: 'triangle', gain: 0.06 });
+    tone(LADDER[8], 0.08, 0.3, { type: 'triangle', gain: 0.06 });
+  },
+  /** Major chain (4+ Pulses): a layered discharge under the last wave. */
+  majorChain(count: number) {
+    if (!ready()) return;
+    tone(60, 0, 0.6, { type: 'sine', gain: 0.25, to: 35 });
+    noise(0, 0.7, 0.07 + Math.min(count - 4, 3) * 0.02, 5000, 400, 0.8);
+    [0, 4, 7].forEach((n, i) => tone(LADDER[n + 3], 0.05 + i * 0.04, 0.5, { type: 'sine', gain: 0.05 }));
+  },
   gameOver() {
     if (!ready()) return;
     [659.25, 523.25, 440, 329.63].forEach((f, i) => tone(f, i * 0.15, 0.5, { type: 'sine', gain: 0.08 }));
