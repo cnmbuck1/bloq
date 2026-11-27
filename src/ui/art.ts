@@ -2,7 +2,7 @@
 // the shareable results card and the app icon / launch art. All generated locally.
 
 import { drawOrbIcon } from '../brand/cnmbuck-orb';
-import { drawBlock, paintFrame, roundRect, setRenderScale, type MaterialLook } from '../render/blocks';
+import { drawBlock, paintEmptyCell, paintFrame, roundRect, setRenderScale, type MaterialLook } from '../render/blocks';
 
 const MAGENTA_LOOK: MaterialLook = { id: 'magenta', color: '#D936AD', highlight: '#FF9BEA', shadow: '#64164F' };
 import { THEME, rgba } from '../render/theme';
@@ -379,4 +379,29 @@ export function paintDailyArt(canvas: HTMLCanvasElement) {
     if (ch === '.') return;
     drawBlock(g, ox + c * pitch + (pitch - cell) / 2, oy + r * pitch + (pitch - cell) / 2, cell, ch === 'P', 0, true, { material: MAGENTA_LOOK });
   }));
+}
+
+/**
+ * Build 6 Daily preview: today's actual starting board (the same puzzle everyone gets), as a miniature recessed
+ * board with the real crystals. Pulse Blocks show as Pulse crystals.
+ */
+export function paintDailyPreview(canvas: HTMLCanvasElement, cells: ({ pulse?: boolean } | null)[], size = 8) {
+  const { g, w, h } = fit(canvas);
+  g.clearRect(0, 0, w, h);
+  if (w < 4 || h < 4) return;
+  const side = Math.min(w - 8, h - 8);
+  const x0 = (w - side) / 2, y0 = (h - side) / 2;
+  const pool = g.createRadialGradient(w / 2, h / 2, side * 0.3, w / 2, h / 2, Math.min(w, h) * 0.5);
+  pool.addColorStop(0, rgba(THEME.gold, 0.08)); pool.addColorStop(1, rgba(THEME.gold, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  const frame = Math.max(4, side * 0.035);
+  paintFrame(g, x0, y0, side, side, side * 0.06, frame, true);
+  const pad = frame + side * 0.012;
+  const pitch = (side - pad * 2) / size, cell = pitch * 0.9;
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+    const x = x0 + pad + c * pitch + (pitch - cell) / 2, y = y0 + pad + r * pitch + (pitch - cell) / 2;
+    const v = cells[r * size + c];
+    if (v) drawBlock(g, x, y, cell, !!v.pulse, 0, true, { material: MAGENTA_LOOK });
+    else paintEmptyCell(g, x, y, cell);
+  }
 }

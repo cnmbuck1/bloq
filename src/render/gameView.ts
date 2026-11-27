@@ -8,7 +8,7 @@ import type { Shape } from '../engine/pieces';
 import { playability, type Playability } from '../engine/rotation';
 import type { PlacementTarget } from '../game/session';
 import { Animator } from './animator';
-import { drawBlock, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
+import { blockStyle, drawBlock, drawBlockShards, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
 import { THEME, rgba } from './theme';
 
 export interface Layout {
@@ -319,13 +319,16 @@ export class GameView {
     }
 
     // Placed blocks.
+    const odOn = !!state.od && state.od.active > 0;
+    const pp = A.placePulse;
     const charging = new Map<number, number>();
     for (const c of A.charges) if (now >= c.start) charging.set(c.k, Math.min(1, (now - c.start) / c.dur));
     for (let k = 0; k < 64; k++) {
       const cell = board.cells[k];
       if (!cell || A.hidden.has(k)) continue;
       const { x, y } = this.cellXY(Math.floor(k / 8), k % 8);
-      let lift = 0, bright = 0, scale = 1;
+      let lift = 0, bright = 0, scale = 1, under = 0;
+      if (pp && now >= pp.start && pp.cells.includes(k)) under = Math.sin(Math.PI * Math.min(1, (now - pp.start) / pp.dur)) * (this.reduced ? 0.5 : 1);
       const st = A.settles.get(k);
       if (st !== undefined) {
         // Snap, then a 100 ms compression and settle.
@@ -340,7 +343,7 @@ export class GameView {
       }
       if (willClear.has(k)) bright = Math.max(bright, 0.22);
       if (d?.blast.has(k)) bright = Math.max(bright, 0.18);
-      drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0), material: this.matAt(Math.floor(k / 8), k % 8, now) });
+      drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, under, od: odOn && !cell.pulse, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0), material: this.matAt(Math.floor(k / 8), k % 8, now) });
       // Contact highlight: the piece's edges catch the light as it locks in.
       const ct = A.contact;
       if (ct && now >= ct.start && ct.cells.includes(k)) {
@@ -366,19 +369,22 @@ export class GameView {
         }
         d.shape.cells.forEach(([dr, dc], i) => {
           const { x, y } = this.cellXY(d.target!.row + dr, d.target!.col + dc);
-          drawBlock(g, x, y, L.cell, d.piece.pulseIndex === i, now, true, { alpha: 0.38 });
-          g.strokeStyle = rgba(THEME.pulse, 0.9); g.lineWidth = 2;
-          roundRect(g, x + 1, y + 1, L.cell - 2, L.cell - 2, L.cell * 0.14); g.stroke();
+          // Build 6 valid preview: a ghost crystal sitting in the socket with soft light under it.
+          const breathe = this.reduced ? 0.5 : 0.5 + 0.5 * Math.sin(now * 0.008);
+          drawBlock(g, x, y, L.cell, d.piece.pulseIndex === i, now, true, { alpha: 0.42 + 0.08 * breathe, under: 0.55, od: odOn });
+          g.strokeStyle = rgba(d.piece.pulseIndex === i ? THEME.pulse : currentMaterial().highlight, 0.45 + 0.2 * breathe); g.lineWidth = 1.4;
+          roundRect(g, x + 1, y + 1, L.cell - 2, L.cell - 2, L.cell * 0.13); g.stroke();
         });
       } else if (d.overBoard) {
         for (const [dr, dc] of d.shape.cells) {
           const r = d.raw.row + dr, c = d.raw.col + dc;
           if (r < 0 || c < 0 || r > 7 || c > 7) continue;
           const { x, y } = this.cellXY(r, c);
-          g.fillStyle = rgba(THEME.invalid, 0.16);
-          roundRect(g, x, y, L.cell, L.cell, L.cell * 0.14); g.fill();
-          g.strokeStyle = rgba(THEME.invalid, 0.85); g.lineWidth = 2;
-          roundRect(g, x + 1.5, y + 1.5, L.cell - 3, L.cell - 3, L.cell * 0.14); g.stroke();
+          // Build 6 invalid preview: a muted red socket, calmer than Build 4 (no bright outline flare).
+          g.fillStyle = rgba(THEME.invalid, 0.12);
+          roundRect(g, x, y, L.cell, L.cell, L.cell * 0.13); g.fill();
+          g.strokeStyle = rgba(THEME.invalid, 0.6); g.lineWidth = 1.4;
+          roundRect(g, x + 1.5, y + 1.5, L.cell - 3, L.cell - 3, L.cell * 0.13); g.stroke();
         }
       }
     }
@@ -474,16 +480,35 @@ export class GameView {
       g.fillStyle = rg; g.fillRect(cx - R, cy - R, R * 2, R * 2);
     }
 
+    // Build 6 afterglow: the cleared sockets keep a fading light for a moment, so the eye reads where the line was.
+    const ag = A.afterglow;
+    if (ag && now >= ag.start) {
+      const p = (now - ag.start) / ag.dur;
+      const a = (1 - p) * (1 - p) * Math.min(1, 0.35 + 0.2 * ag.strength) * visualParams().wave;
+      const col = ag.od ? THEME.gold : currentMaterial().highlight;
+      for (const k of ag.cells) {
+        const { x, y } = this.cellXY(Math.floor(k / 8), k % 8);
+        const cx = x + L.cell / 2, cy = y + L.cell / 2;
+        const rg = g.createRadialGradient(cx, cy, 0, cx, cy, L.cell * 0.75);
+        rg.addColorStop(0, rgba(col, a * 0.5)); rg.addColorStop(1, rgba(col, 0));
+        g.fillStyle = rg; g.fillRect(cx - L.cell, cy - L.cell, L.cell * 2, L.cell * 2);
+      }
+    }
+
     // Blocks leaving: brighten, then break up.
     for (const dy of A.dying) {
       const { x, y } = this.cellXY(Math.floor(dy.k / 8), dy.k % 8);
       if (now < dy.start) {
         const b = now >= dy.brightFrom ? Math.min(1, (now - dy.brightFrom) / Math.max(1, dy.start - dy.brightFrom)) : 0;
-        drawBlock(g, x, y, L.cell, dy.cell.pulse, now, this.reduced, { bright: 0.3 + 0.6 * b });
+        drawBlock(g, x, y, L.cell, dy.cell.pulse, now, this.reduced, { bright: 0.3 + 0.6 * b, od: dy.od, under: b * 0.6 });
         continue;
       }
       const p = (now - dy.start) / dy.dur;
-      drawBlock(g, x, y, L.cell, dy.cell.pulse, now, this.reduced, { scale: this.reduced ? 1 : 1 - p * 0.35, alpha: 1 - p, bright: 0.9 * (1 - p) });
+      if (this.reduced || dy.cell.pulse) {
+        drawBlock(g, x, y, L.cell, dy.cell.pulse, now, this.reduced, { scale: this.reduced ? 1 : 1 - p * 0.35, alpha: 1 - p, bright: 0.9 * (1 - p), od: dy.od });
+      } else {
+        drawBlockShards(g, x, y, L.cell, !!dy.cell.pulse, p, dy.k + dy.start * 0.001, { power: dy.power, dir: dy.dir, od: dy.od });
+      }
     }
 
     // Pulse shockwaves: a ring that grows to exactly the 3x3 blast area, never beyond it.
@@ -662,32 +687,100 @@ export class GameView {
   odRotation: 'free' | 'limited' | 'reduced' | 'none' = 'free';
   odDuration = 5;
 
-  /** Ambient background: a cool gradient behind the board; it warms gold while Overdrive is active. */
+  /** Build 6: 0..1 Overdrive environment mix, eased so the change in and out is gradual. */
+  private odEnv = 0;
+  private lastBgT = 0;
+  private dust: { x: number; y: number; vx: number; vy: number; born: number; life: number; r: number }[] = [];
+
+  /**
+   * Build 6 layered reactor background: (1) a cached base of deep graphite with a radial core behind the board and
+   * a vignette; (2) a faint cached structure of concentric reactor rings and radial ribs; (3) live layers: two very
+   * slow light drifts, rare dust motes, a bloom when a clear releases energy, a combo tint and the Overdrive warmth,
+   * all eased so nothing flashes.
+   */
   private drawBackground(now: number, state: GameState) {
     const g = this.g, L = this.layout;
+    const cx = L.W / 2, cy = L.by + L.boardPx * 0.5;
     if (!this.bgCache) {
       const c = document.createElement('canvas');
       c.width = Math.ceil(L.W * this.dpr); c.height = Math.ceil(L.H * this.dpr);
       const b = c.getContext('2d')!;
       b.scale(this.dpr, this.dpr);
-      b.fillStyle = THEME.bg; b.fillRect(0, 0, L.W, L.H);
-      const cx = L.W / 2, cy = L.by + L.boardPx * 0.45;
-      const rg = b.createRadialGradient(cx, cy, 0, cx, cy, Math.max(L.W, L.H) * 0.75);
-      rg.addColorStop(0, rgba('#1A2C3E', 0.9 * visualParams().boardLight)); rg.addColorStop(0.55, rgba('#101A26', 0.6)); rg.addColorStop(1, rgba(THEME.bg, 0));
+      b.fillStyle = '#080C13'; b.fillRect(0, 0, L.W, L.H);
+      const lightK = visualParams().boardLight;
+      const rg = b.createRadialGradient(cx, cy, 0, cx, cy, Math.max(L.W, L.H) * 0.8);
+      rg.addColorStop(0, rgba('#251C3A', 0.95 * lightK)); rg.addColorStop(0.35, rgba('#16192A', 0.85)); rg.addColorStop(0.7, rgba('#0C111B', 0.6)); rg.addColorStop(1, 'rgba(8,12,19,0)');
       b.fillStyle = rg; b.fillRect(0, 0, L.W, L.H);
+      // structure: concentric rings and ribs, barely visible
+      b.save();
+      b.strokeStyle = 'rgba(170,150,230,0.045)'; b.lineWidth = 1;
+      const R0 = L.boardPx * 0.62;
+      for (let i = 0; i < 6; i++) { b.beginPath(); b.arc(cx, cy, R0 + i * L.boardPx * 0.16, 0, Math.PI * 2); b.stroke(); }
+      b.strokeStyle = 'rgba(170,150,230,0.03)';
+      for (let i = 0; i < 24; i++) {
+        const t = (i / 24) * Math.PI * 2;
+        b.beginPath(); b.moveTo(cx + Math.cos(t) * R0, cy + Math.sin(t) * R0); b.lineTo(cx + Math.cos(t) * R0 * 2.6, cy + Math.sin(t) * R0 * 2.6); b.stroke();
+      }
+      b.restore();
+      // vignette
+      const vg = b.createRadialGradient(cx, L.H * 0.5, Math.min(L.W, L.H) * 0.35, cx, L.H * 0.5, Math.max(L.W, L.H) * 0.85);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.55)');
+      b.fillStyle = vg; b.fillRect(0, 0, L.W, L.H);
       this.bgCache = c;
     }
     g.drawImage(this.bgCache, 0, 0, L.W, L.H);
+    const dt = Math.min(100, Math.max(0, now - (this.lastBgT || now))); this.lastBgT = now;
     const od = state.od;
-    if (od && od.active > 0) {
-      // Very slow lighting drift while Overdrive is on (no rapid flashing).
+    const odTarget = od && od.active > 0 ? 1 : 0;
+    this.odEnv += (odTarget - this.odEnv) * (this.reduced ? 1 : Math.min(1, dt / 900));
+    const reduced = this.reduced || this.lowFx;
+    // slow light drifts
+    if (!reduced) {
+      for (let i = 0; i < 2; i++) {
+        const t = now * 0.00007 + i * 3.1;
+        const x = cx + Math.cos(t) * L.W * 0.35, y = cy + Math.sin(t * 1.3) * L.boardPx * 0.5;
+        const R = L.boardPx * 0.7;
+        const rg = g.createRadialGradient(x, y, 0, x, y, R);
+        rg.addColorStop(0, rgba(i ? '#5A3C9C' : '#8A2E86', 0.07)); rg.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = rg; g.fillRect(x - R, y - R, R * 2, R * 2);
+      }
+      // rare dust motes (at most 10 alive)
+      if (this.dust.length < 10 && Math.random() < dt / 900) {
+        this.dust.push({ x: Math.random() * L.W, y: L.by + Math.random() * (L.H - L.by), vx: (Math.random() - 0.5) * 0.006, vy: -0.004 - Math.random() * 0.008, born: now, life: 4000 + Math.random() * 4000, r: 0.6 + Math.random() * 1.1 });
+      }
+      this.dust = this.dust.filter((p) => now < p.born + p.life);
+      for (const p of this.dust) {
+        const age = now - p.born, q = age / p.life;
+        const a = Math.sin(Math.PI * q) * 0.35;
+        g.fillStyle = rgba(this.odEnv > 0.5 ? THEME.gold : '#D9B8FF', a);
+        g.beginPath(); g.arc(p.x + p.vx * age, p.y + p.vy * age, p.r, 0, Math.PI * 2); g.fill();
+      }
+    }
+    // combo tint (more ambient energy on consecutive clears)
+    const combo = state.combo ?? 0;
+    this.comboEnv += (Math.min(1, combo / 5) - this.comboEnv) * Math.min(1, dt / 600);
+    // energy release bloom
+    const A = this.animator;
+    const since = now - A.energyAt;
+    const bloom = since >= 0 && since < 900 ? (1 - since / 900) * A.energyAmt : 0;
+    const k = this.comboEnv * 0.08 + bloom * 0.14;
+    if (k > 0.004) {
+      const R = L.boardPx * 1.05;
+      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, R);
+      rg.addColorStop(0, rgba('#C04BD8', 0)); rg.addColorStop(0.55, rgba('#C04BD8', k)); rg.addColorStop(1, rgba('#C04BD8', 0));
+      g.fillStyle = rg; g.fillRect(0, 0, L.W, L.H);
+    }
+    if (this.odEnv > 0.01) {
+      // Overdrive: the reactor warms to champagne gold, breathing very slowly
       const breathe = this.reduced ? 0.5 : 0.5 + 0.5 * Math.sin(now * 0.0018);
-      const cx = L.W / 2, cy = L.by + L.boardPx / 2;
-      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, L.boardPx * 0.95);
-      rg.addColorStop(0, rgba(THEME.gold, 0)); rg.addColorStop(0.6, rgba(THEME.gold, (0.05 + 0.04 * breathe) * visualParams().odLight)); rg.addColorStop(1, rgba(THEME.gold, 0));
+      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, L.boardPx * 1.1);
+      rg.addColorStop(0, rgba(THEME.gold, 0)); rg.addColorStop(0.6, rgba(THEME.gold, (0.07 + 0.04 * breathe) * visualParams().odLight * this.odEnv)); rg.addColorStop(1, rgba(THEME.gold, 0));
       g.fillStyle = rg; g.fillRect(0, 0, L.W, L.H);
     }
   }
+  private comboEnv = 0;
+  /** Reduced effects (Settings): no drifting light, no dust, fewer particles. */
+  lowFx = false;
 
   /** The board perimeter reacts: cyan with a combo, champagne gold with Overdrive (ready: corners; active: traces). */
   private drawPerimeter(now: number, state: GameState) {
@@ -704,14 +797,45 @@ export class GameView {
       g.shadowColor = THEME.pulse; g.shadowBlur = this.reduced ? 0 : 6 + combo * 2;
       roundRect(g, x, y, w, w, rr); g.stroke();
     }
-    if (active) {
+    // Build 6: perimeter light on each energy release (clears), stronger for bigger clears.
+    const since = now - this.animator.energyAt;
+    if (since >= 0 && since < 700 && !active) {
+      const q = 1 - since / 700;
+      g.save();
+      g.strokeStyle = rgba('#E070D8', 0.45 * q * this.animator.energyAmt); g.lineWidth = Math.max(1.5, L.frame * 0.3);
+      g.shadowColor = '#C04BD8'; g.shadowBlur = this.reduced ? 0 : 14 * q;
+      roundRect(g, x, y, w, w, rr); g.stroke();
+      g.restore();
+    }
+    if (active || this.odEnv > 0.02) {
       const breathe = this.reduced ? 0.6 : 0.6 + 0.4 * Math.sin(now * 0.004);
-      const W = visualParams().odLight;
+      const W = visualParams().odLight * Math.max(active ? 0.15 : 0, this.odEnv);
       g.strokeStyle = rgba(THEME.gold, Math.min(1, 0.65 * breathe * W)); g.lineWidth = Math.max(2, L.frame * 0.36);
       g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 12 * W;
       roundRect(g, x, y, w, w, rr); g.stroke();
+      // Build 6: energy arcs crawl along the frame while Overdrive is live (regenerated ~11 times a second).
+      if (!this.reduced && !this.lowFx && active) {
+        const per = w * 4, tick = Math.floor(now / 90);
+        const rnd = (i: number) => { const v = Math.sin(tick * 12.9898 + i * 78.233) * 43758.5453; return v - Math.floor(v); };
+        const pt = (d: number): [number, number] => { d = ((d % per) + per) % per; return d < w ? [x + d, y] : d < 2 * w ? [x + w, y + d - w] : d < 3 * w ? [x + 3 * w - d, y + w] : [x, y + 4 * w - d]; };
+        g.save();
+        g.lineCap = 'round'; g.lineJoin = 'round';
+        for (let k = 0; k < 3; k++) {
+          const start = rnd(k) * per, len = L.pitch * (1.2 + rnd(k + 9) * 1.8);
+          g.strokeStyle = rgba(k === 0 ? '#F3D9FF' : '#C46BFF', 0.75 * W); g.lineWidth = k === 0 ? 1.6 : 1.1;
+          g.shadowColor = '#B14CFF'; g.shadowBlur = 10;
+          g.beginPath();
+          for (let i = 0; i <= 8; i++) {
+            const [px, py] = pt(start + (len * i) / 8);
+            const j = (rnd(k * 20 + i) - 0.5) * L.frame * 2.2 * (i === 0 || i === 8 ? 0 : 1);
+            if (i === 0) g.moveTo(px + j, py + j); else g.lineTo(px + j, py - j);
+          }
+          g.stroke();
+        }
+        g.restore();
+      }
       // Two light traces running round the frame.
-      if (!this.reduced) {
+      if (!this.reduced && active) {
         const per = w * 4;
         const pt = (d: number) => d < w ? [x + d, y] : d < 2 * w ? [x + w, y + d - w] : d < 3 * w ? [x + 3 * w - d, y + w] : [x, y + 4 * w - d];
         for (let i = 0; i < 2; i++) {
@@ -755,7 +879,8 @@ export class GameView {
     if (!od || state.mode === 'tutorial') return;
     const g = this.g, L = this.layout;
     const R = this.odRect();
-    const target = od.active > 0 ? 0 : od.charge;
+    // Build 6: charge still in flight (motes) is shown only when it arrives.
+    const target = od.active > 0 ? 0 : Math.max(0, od.charge - this.animator.pendingOd);
     // The meter climbs smoothly to its new value.
     this.odShown = this.reduced ? target : this.odShown + (target - this.odShown) * 0.18;
     if (Math.abs(this.odShown - target) < 0.5 || target < this.odShown - 1) this.odShown = target;
@@ -812,7 +937,11 @@ export class GameView {
       g.fillStyle = '#2A1C00'; g.fillText('READY', bx + bw / 2, cy + 0.5);
     }
     // Gained-charge pulse, and the held-off game over (OVERDRIVE AVAILABLE) ring.
-    const pulse = now < this.odPulse + 700 ? 1 - (now - this.odPulse) / 700 : 0;
+    const lastHit = this.animator.odArrivals.length ? this.animator.odArrivals[this.animator.odArrivals.length - 1] : -1e9;
+    const absorb = now < lastHit + 500 ? 1 - (now - lastHit) / 500 : 0;
+    // Near full (80%+): a slow breathing outline says it is almost ready.
+    const near = !ready && od.charge >= 80 && !this.reduced ? 0.25 + 0.2 * Math.sin(now * 0.006) : 0;
+    const pulse = Math.max(absorb * 0.9, near, now < this.odPulse + 700 && !this.animator.motes.length && absorb === 0 ? 1 - (now - this.odPulse) / 700 : 0);
     const avail = this.odAvailable ? 0.5 + 0.5 * Math.sin(now * 0.008) : 0;
     const a = Math.max(pulse, avail);
     if (a > 0 && !this.reduced) {
@@ -843,7 +972,34 @@ export class GameView {
       rg.addColorStop(0, o.gold ? '#FFF6DC' : rgba(THEME.pulseCore, 1)); rg.addColorStop(0.4, o.gold ? rgba(THEME.gold, 0.9) : rgba(THEME.pulse, 0.8)); rg.addColorStop(1, rgba(THEME.pulse, 0));
       g.fillStyle = rg; g.fillRect(x - R * 2, y - R * 2, R * 4, R * 4);
     }
-    void state;
+    // Build 6: Overdrive charge motes fly from the cleared cells into the meter's fill edge.
+    if (state.od) {
+      const R = this.odRect();
+      const tx = R.x + R.w * 0.35 + R.w * 0.6 * Math.min(1, this.odShown / 100), ty = R.y + R.h / 2;
+      for (const m of this.animator.motes) {
+        if (now < m.start) continue;
+        const p = Math.min(1, (now - m.start) / m.dur);
+        const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        const from = this.cellXY(m.r, m.c);
+        const fx = from.x + L.cell / 2, fy = from.y + L.cell / 2;
+        const side = Math.sin(m.seed) * L.pitch * 1.6;
+        const mx = (fx + tx) / 2 + side, my = Math.min(fy, ty) - L.pitch * (0.6 + 0.4 * Math.cos(m.seed));
+        const x = (1 - e) * (1 - e) * fx + 2 * (1 - e) * e * mx + e * e * tx;
+        const y = (1 - e) * (1 - e) * fy + 2 * (1 - e) * e * my + e * e * ty;
+        const col = m.gold ? THEME.gold : '#E04BC0';
+        const Rr = 3 + 2.5 * (1 - p);
+        // short trail
+        for (let t = 3; t >= 1; t--) {
+          const q = Math.max(0, e - t * 0.04);
+          const qx = (1 - q) * (1 - q) * fx + 2 * (1 - q) * q * mx + q * q * tx, qy = (1 - q) * (1 - q) * fy + 2 * (1 - q) * q * my + q * q * ty;
+          g.fillStyle = rgba(col, 0.18 * (4 - t) / 3);
+          g.beginPath(); g.arc(qx, qy, Rr * (1 - t * 0.2), 0, Math.PI * 2); g.fill();
+        }
+        const rg = g.createRadialGradient(x, y, 0, x, y, Rr * 2.4);
+        rg.addColorStop(0, '#FFFFFF'); rg.addColorStop(0.3, rgba(col, 0.95)); rg.addColorStop(1, rgba(col, 0));
+        g.fillStyle = rg; g.fillRect(x - Rr * 2.4, y - Rr * 2.4, Rr * 4.8, Rr * 4.8);
+      }
+    }
   }
 
   /** Material for a standard block at (r, c) while a material wave sweeps the board (undefined = current). */
@@ -855,7 +1011,19 @@ export class GameView {
     return Math.hypot(r - w.or, c - w.oc) / maxD <= p * 1.1 ? w.to : w.from;
   }
 
-  private drawPiece(piece: PieceInstance, shape: Shape, cx: number, cy: number, pitch: number, alpha: number, now: number, angle = 0, material?: MaterialLook) {
+  /** Build 6: when each tray slot last received a new piece (materialise animation). */
+  private trayBorn: number[] = [-1e9, -1e9, -1e9];
+  private trayFilled = [true, true, true];
+  /** Marks a slot as freshly filled when it goes from empty to holding a piece (tray refill). */
+  private noteTray(state: GameState, now: number) {
+    for (let i = 0; i < 3; i++) {
+      const has = !!state.tray[i];
+      if (has && !this.trayFilled[i]) this.trayBorn[i] = now;
+      this.trayFilled[i] = has;
+    }
+  }
+
+  private drawPiece(piece: PieceInstance, shape: Shape, cx: number, cy: number, pitch: number, alpha: number, now: number, angle = 0, material?: MaterialLook, extra: { muted?: boolean; od?: boolean; bright?: number; under?: number } = {}) {
     const L = this.layout;
     const gapRatio = L.gap / L.pitch;
     const cell = pitch * (1 - gapRatio);
@@ -864,19 +1032,21 @@ export class GameView {
     if (angle) { g.save(); g.translate(cx, cy); g.rotate(angle); g.translate(-cx, -cy); }
     shape.cells.forEach(([dr, dc], i) => {
       const x = cx - w / 2 + dc * pitch + (pitch - cell) / 2, y = cy - h / 2 + dr * pitch + (pitch - cell) / 2;
-      drawBlock(g, x, y, cell, piece.pulseIndex === i, now, this.reduced, { alpha, material });
+      drawBlock(g, x, y, cell, piece.pulseIndex === i, now, this.reduced, { alpha, material, ...extra });
     });
     if (angle) g.restore();
   }
 
   private drawTray(now: number, state: GameState) {
     const g = this.g;
+    this.noteTray(state, now);
     for (let i = 0; i < 3; i++) {
       const r = this.slotRect(i);
       const p = state.tray[i];
       const tutorialHidden = state.mode === 'tutorial' && this.tutorialTarget?.slot !== i;
       const empty = !p || tutorialHidden;
-      paintFrame(g, r.x, r.y, r.w, r.h, 14, 4, false);
+      if (blockStyle() === 'b6') paintPedestal(g, r.x, r.y, r.w, r.h, empty ? 0 : 1);
+      else paintFrame(g, r.x, r.y, r.w, r.h, 14, 4, false);
       if (empty) {
         // a faint dashed socket marks an empty slot
         g.strokeStyle = rgba(THEME.gridBorder, 0.6); g.lineWidth = 1; g.setLineDash([4, 5]);
@@ -887,7 +1057,9 @@ export class GameView {
       const shape = shapeOf(p!);
       const eff = this.effective(state);
       const play = this.animator.busy ? 'now' : playability(eff.rc, state.board, p!, eff.energy);
-      const alpha = play === 'now' ? 1 : play === 'after-rotation' ? 0.62 : 0.3;
+      // Build 6: unavailable pieces keep their material but are muted, not see-through.
+      const alpha = play === 'now' ? 1 : play === 'after-rotation' ? 0.78 : 0.62;
+      const muted = play !== 'now';
       let angle = 0;
       const rs = this.rotating.get(i);
       if (rs !== undefined) {
@@ -908,7 +1080,11 @@ export class GameView {
       // The tray changes material as the wave finishes crossing the board.
       const mw = this.animator.materialWave;
       const trayMat = mw ? ((now - mw.start) / mw.dur >= 0.85 ? mw.to : mw.from) : undefined;
-      this.drawPiece(p!, shape, c.x, c.y, this.trayCellFor(shape), alpha, now, angle, trayMat);
+      // new pieces materialise: a short rise and brighten after the tray refills
+      const born = this.trayBorn[i];
+      const mt = this.reduced ? 1 : Math.min(1, (now - born) / 260);
+      const odOn = !!state.od && state.od.active > 0;
+      this.drawPiece(p!, shape, c.x, c.y + (1 - mt) * 8, this.trayCellFor(shape), alpha * (0.2 + 0.8 * mt), now, angle, trayMat, { muted, od: odOn, bright: (1 - mt) * 0.6, under: play === 'now' ? 0.18 : 0 });
     }
   }
 
@@ -921,7 +1097,10 @@ export class GameView {
       const pitch = small + (L.pitch - small) * s;
       this.g.save();
       this.g.shadowColor = 'rgba(0,0,0,0.55)'; this.g.shadowBlur = 22; this.g.shadowOffsetY = 12;
-      this.drawPiece(d.piece, d.shape, d.x, d.y - d.lift * s, pitch, 1, now);
+      // Build 6 selected/dragged: lifted, brighter, with light under each crystal.
+      const sel = this.reduced ? 1 : Math.min(1, (now - d.start) / 110);
+      const st = this.getState();
+      this.drawPiece(d.piece, d.shape, d.x, d.y - d.lift * s, pitch, 1, now, 0, undefined, { bright: 0.18 * sel, under: 0.5 * sel, od: !!st.od && st.od.active > 0 });
       this.g.restore();
     }
     const r = this.returning;
