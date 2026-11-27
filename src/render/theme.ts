@@ -5,7 +5,7 @@
 export const THEME = {
   bg: '#0C131D',
   bg2: '#141E2B',
-  empty: '#1C2A38',
+  empty: '#17222E',
   gridBorder: '#304556',
   titanium: '#657F92',
   titaniumHi: '#A9C4D4',

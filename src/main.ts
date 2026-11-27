@@ -1,7 +1,8 @@
 import { App } from './app';
 import { PIECES } from './engine/pieces';
-import { renderAppIcon, renderLaunch, renderShareCard } from './ui/art';
+import { greedyPlan } from './engine/sim';
+import { renderAppIcon, renderDailyShareCard, renderLaunch, renderShareCard } from './ui/art';
 
 const app = new App();
 // Handles for automated play-testing and the console.
-Object.assign(window, { __bloq: app, __bloqPieces: PIECES, __bloqArt: { renderAppIcon, renderLaunch, renderShareCard } });
+Object.assign(window, { __bloq: app, __bloqPieces: PIECES, __bloqSim: { greedyPlan }, __bloqArt: { renderAppIcon, renderLaunch, renderShareCard, renderDailyShareCard } });

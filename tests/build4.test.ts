@@ -7,6 +7,7 @@ import { deserializeGame, serializeGame } from '../src/engine/save';
 import { scoreMove } from '../src/engine/scoring';
 import { boardFromArt } from '../src/game/boardArt';
 import type { PieceInstance } from '../src/engine/board';
+import { SCENARIOS } from '../src/dev/scenarios';
 
 const C = DEFAULT_CONFIG;
 const E = '........';
@@ -321,5 +322,53 @@ describe('Mission Mode foundation', () => {
     expect(searchSolution(m)).not.toBeNull();
     expect(verifySolution({ ...m, solution: [{ slot: 1, turns: 0, row: 0, col: 7, value: 0 }] })).toBe(false);
     expect(objectiveMet({ type: 'score', target: 1 }, newGame(1), [])).toBe(false);
+  });
+});
+
+describe('Build 4 showcase and test scenarios', () => {
+  const load = (name: string) => {
+    const sc = SCENARIOS.find((x) => x.name === name)!;
+    expect(sc, name).toBeTruthy();
+    const base = newGame(7, C, { board: boardFromArt(sc.board), energy: sc.energy, score: sc.score, pulseChance: 0 });
+    const s: GameState = {
+      ...base, tray: sc.tray.map((q) => (q ? { ...q } : null)), energy: sc.energy, combo: sc.combo ?? 0,
+      shield: sc.shield ?? (sc.combo ? C.combo.protection : 0),
+      od: sc.od ? { charge: sc.od.charge, active: sc.od.active ?? 0, freeLeft: C.overdrive.limitedFree, score: 0 } : base.od,
+    };
+    s.over = stateIsOver(s, C);
+    return s;
+  };
+  it('three- and five-Pulse chains', () => {
+    expect(mv(load('Showcase: three-Pulse chain'), 0, 3, 2).result.chain).toBe(3);
+    expect(mv(load('Showcase: five-Pulse chain'), 0, 3, 2).result.chain).toBe(5);
+  });
+  it('Overdrive showcases', () => {
+    const a = activateOverdrive(load('Showcase: Overdrive activation'));
+    expect(a.ok).toBe(true);
+    const t = mv(load('Showcase: Overdrive triple clear'), 0, 0, 7).result;
+    expect(t.rows.length).toBe(3);
+    expect(t.points.overdrive).toBe(2);
+    const big = mv(load('Showcase: major level advancement'), 0, 0, 7).result;
+    expect(big.levelBefore).toBe(3);
+    expect(big.levelAfter).toBeGreaterThanOrEqual(5);
+    const last = mv(load('Overdrive final placement'), 0, 0, 7).result;
+    expect(last.odEnded).toBe(true);
+  });
+  it('perfect clears and the material transition', () => {
+    expect(mv(load('Showcase: Perfect Clear'), 0, 7, 5).result.perfect).toBe(true);
+    expect(mv(load('Perfect Clear with a Pulse'), 0, 6, 5).result.perfect).toBe(true);
+    const m = mv(load('Showcase: full-board material transition'), 0, 7, 7).result;
+    expect(m.levelAfter).toBe(5);
+    expect(m.rows).toEqual([7]);
+    expect(m.cols).toEqual([]);
+  });
+  it('Combo Protection and the held-off game over', () => {
+    const kept = mv(load('Combo Protection'), 1, 0, 0).result;
+    expect(kept.comboProtected).toBe(true);
+    expect(kept.combo).toBe(3);
+    expect(mv(load('Combo Protection already spent'), 1, 0, 0).result.combo).toBe(0);
+    const held = load('Overdrive holds off game over');
+    expect(held.over).toBe(false);
+    expect(overState(held, C).odAvailable).toBe(true);
   });
 });

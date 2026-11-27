@@ -216,9 +216,9 @@ describe('materials', () => {
 });
 
 describe('career and achievements', () => {
-  it('there are 19 achievements with unique ids', () => {
-    expect(ACHIEVEMENTS).toHaveLength(19);
-    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(19);
+  it('there are 32 achievements (19 from Build 3, 13 from Build 4) with unique ids', () => {
+    expect(ACHIEVEMENTS).toHaveLength(32);
+    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(32);
   });
 
   it('lifetime points are never credited twice for the same move (restore, reopen, crash)', () => {

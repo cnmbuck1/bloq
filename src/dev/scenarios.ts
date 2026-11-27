@@ -10,7 +10,10 @@ export interface Scenario {
   score?: number; combo?: number; career?: Partial<LifetimeStats>;
   /** Shown when the scenario loads: what to do to see it. */
   hint?: string;
-  group?: 'Build 2' | 'Build 3';
+  group?: 'Build 2' | 'Build 3' | 'Build 4' | 'Build 4 showcase';
+  /** Build 4: Overdrive charge (0..100) and active placements left; Combo Protection left. */
+  od?: { charge: number; active?: number };
+  shield?: number;
 }
 
 const p = (defId: string, pulseIndex = -1): PieceInstance => ({ defId, color: 0, pulseIndex, rot: 0 });
@@ -76,4 +79,33 @@ const BUILD3: Scenario[] = ([
   { name: 'Beyond Level 15', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 1, score: 127400, hint: 'Clear the row to reach Level 16, Quantum Master VII (127,500)' },
 ] satisfies Scenario[]).map((s): Scenario => ({ ...s, group: 'Build 3' }));
 
-export const SCENARIOS: Scenario[] = [...BUILD3, ...SCENARIOS_B2];
+// ---------------------------------------------------------------- Build 4: Overdrive, Combo Protection, Perfect Clear
+
+const STRAY = 'X.......';
+const THREE_CHAIN = [E, '...XXP..', '..XXPX..', 'XX..XXXX', '..XXX...', E, E, STRAY];
+const TRIPLE = ['XXXXXXX.', 'XXXXXXX.', 'XXXXXXX.', E, E, E, E, STRAY];
+const DECO4 = ['........', '.X......', 'XX...P..', 'XXX..XX.', 'XPXX.XXX', 'XXXX.XXP', '.XXXXX.X', 'XXX.XXXX'];
+/** Dense board with no complete line; a single at (7,7) completes row 7 only. */
+const DENSE = ['XX.XXXXX', 'X.XXPXXX', 'XXXX.XXX', '.XXXXXX.', 'XXXXX.XX', 'XPXXXX.X', 'XXX.XXXX', 'XXXXXXX.'];
+
+const SHOWCASE: Scenario[] = ([
+  { name: 'Showcase: three-Pulse chain', board: THREE_CHAIN, tray: [p('i2h', 1), p('single'), p('o2')], energy: 3, score: 2400, hint: 'Domino with the Pulse into row 3, columns 2-3' },
+  { name: 'Showcase: five-Pulse chain', board: [...FIVE_CHAIN.slice(0, 7), STRAY], tray: [p('single'), p('i2h'), p('o2')], energy: 3, score: 5200, hint: 'Single in row 4, column 3' },
+  { name: 'Showcase: Overdrive activation', board: DECO4, tray: [p('i3h'), p('o2'), p('l3a')], energy: 2, score: 9800, combo: 2, od: { charge: 100 }, hint: 'Tap the gold Overdrive meter' },
+  { name: 'Showcase: Overdrive triple clear', board: TRIPLE, tray: [p('i3v'), p('o2'), p('single')], energy: 1, score: 6400, combo: 2, od: { charge: 0, active: 4 }, hint: 'Vertical 3 in column 7, rows 0-2: triple clear at 2× points' },
+  { name: 'Showcase: Perfect Clear', board: [E, E, E, E, E, E, E, 'XXXXX...'], tray: [p('i3h'), p('o2'), p('single')], energy: 3, score: 3000, hint: 'Finish the bottom row: the board empties for +2,000' },
+  { name: 'Showcase: major level advancement', board: [...QUAD.slice(0, 7), STRAY], tray: [p('i4v'), p('single'), p('o2')], energy: 1, score: 6000, combo: 4, od: { charge: 0, active: 3 }, hint: 'Quad clear in Overdrive at the top combo: Level 3 to Level 5' },
+  { name: 'Showcase: full-board material transition', board: DENSE, tray: [p('single'), p('o2'), p('i3h')], energy: 2, score: 11900, hint: 'Single at row 7, column 7: Level 5, Emerald sweeps the board' },
+] satisfies Scenario[]).map((s): Scenario => ({ ...s, group: 'Build 4 showcase' }));
+
+const BUILD4: Scenario[] = ([
+  { name: 'Combo Protection', board: [E, E, E, E, '...XX...', E, E, STRAY], tray: [p('o2'), p('single'), p('i3h')], energy: 3, score: 2000, combo: 3, shield: 1, hint: 'Place a piece that clears nothing: the combo holds (×2.0)' },
+  { name: 'Combo Protection already spent', board: [E, E, E, E, '...XX...', E, E, STRAY], tray: [p('o2'), p('single'), p('i3h')], energy: 3, score: 2000, combo: 3, shield: 0, hint: 'A non-clearing move now resets the combo' },
+  { name: 'Overdrive ready', board: DECO4, tray: [p('i3h'), p('o2'), p('single')], energy: 2, score: 4200, od: { charge: 100 }, hint: 'The meter is full: activate it when you like' },
+  { name: 'Overdrive nearly charged', board: TRIPLE, tray: [p('i3v'), p('o2'), p('single')], energy: 2, score: 4200, od: { charge: 80 }, hint: 'A triple clear (+40%) fills the meter' },
+  { name: 'Overdrive holds off game over', board: VERTICAL, tray: [p('i3h'), p('o2'), p('o3')], energy: 0, score: 3000, od: { charge: 100 }, hint: 'No move without rotation: OVERDRIVE AVAILABLE. Activate, then rotate the 3 for free' },
+  { name: 'Overdrive final placement', board: TRIPLE, tray: [p('i3v'), p('o2'), p('single')], energy: 1, score: 6400, od: { charge: 0, active: 1 }, hint: 'The last Overdrive placement resolves fully, then Overdrive ends' },
+  { name: 'Perfect Clear with a Pulse', board: [E, E, E, E, E, E, E, 'XXXXX.XX'], tray: [p('i2v', 1), p('single'), p('o2')], energy: 3, score: 1000, hint: 'Vertical 2 with the Pulse into column 5, rows 6-7' },
+] satisfies Scenario[]).map((s): Scenario => ({ ...s, group: 'Build 4' }));
+
+export const SCENARIOS: Scenario[] = [...SHOWCASE, ...BUILD4, ...BUILD3, ...SCENARIOS_B2];

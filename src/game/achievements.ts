@@ -6,7 +6,8 @@ import type { GameConfig, MaterialDef } from '../engine/config';
 import { materialsUnlockedAt } from '../engine/progression';
 import type { LifetimeStats } from './stats';
 
-export type AchievementIcon = 'line' | 'rotate' | 'pulse' | 'chain' | 'clear' | 'combo' | 'level' | 'games' | 'points' | 'material';
+export type AchievementIcon = 'line' | 'rotate' | 'pulse' | 'chain' | 'clear' | 'combo' | 'level' | 'games' | 'points' | 'material'
+  | 'overdrive' | 'perfect' | 'shield' | 'daily' | 'streak';
 
 export interface AchievementDef {
   id: string;
@@ -48,6 +49,20 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   A('dedicated', 'Dedicated', 'Complete 100 games', 'games', 100, (s) => s.gamesPlayed),
   A('million-point-club', 'Million Point Club', 'Earn 1,000,000 lifetime points', 'points', 1_000_000, (s) => s.lifetimePoints),
   A('material-collector', 'Material Collector', 'Unlock all six materials', 'material', 6, (s) => s.unlockedMaterials.length),
+  // Build 4
+  A('overdrive-initiate', 'Overdrive Initiate', 'Activate Overdrive', 'overdrive', 1, (s) => s.odActivations),
+  A('energy-master', 'Energy Master', 'Activate Overdrive 25 times', 'overdrive', 25, (s) => s.odActivations),
+  A('maximum-reaction', 'Maximum Reaction', 'Trigger a three-Pulse chain during Overdrive', 'chain', 3, (s) => s.odMaxChain),
+  A('critical-overdrive', 'Critical Overdrive', 'Trigger a five-Pulse chain during Overdrive', 'chain', 5, (s) => s.odMaxChain),
+  A('precision-master', 'Precision Master', 'Clear the whole board', 'perfect', 1, (s) => s.perfectClears),
+  A('perfectionist', 'Perfectionist', 'Clear the whole board 10 times', 'perfect', 10, (s) => s.perfectClears),
+  A('combo-guardian', 'Combo Guardian', 'Keep a combo alive with Combo Protection', 'shield', 1, (s) => s.comboProtected),
+  A('daily-initiate', 'Daily Initiate', 'Complete a Daily Challenge', 'daily', 1, (s) => s.dailyCompleted),
+  A('daily-explorer', 'Daily Explorer', 'Complete 3 Daily Challenges', 'daily', 3, (s) => s.dailyCompleted),
+  A('daily-specialist', 'Daily Specialist', 'Complete 7 Daily Challenges', 'daily', 7, (s) => s.dailyCompleted),
+  A('daily-veteran', 'Daily Veteran', 'Complete 30 Daily Challenges', 'daily', 30, (s) => s.dailyCompleted),
+  A('weekly-streak', 'Weekly Streak', 'Complete the Daily Challenge 7 days in a row', 'streak', 7, (s) => s.longestStreak),
+  A('monthly-streak', 'Monthly Streak', 'Complete the Daily Challenge 30 days in a row', 'streak', 30, (s) => s.longestStreak),
 ];
 
 export function achievementProgress(a: AchievementDef, s: LifetimeStats, cfg: GameConfig): { value: number; target: number; done: boolean } {

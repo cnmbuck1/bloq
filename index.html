@@ -18,24 +18,31 @@
     <section id="home" class="screen" aria-label="BLOQ home">
       <header class="home-top">
         <canvas id="logo" class="logo" role="img" aria-label="BLOQ"></canvas>
-        <p class="tagline">Place · Clear · React</p>
+        <p class="tagline">Place · Clear · React.</p>
       </header>
-      <div class="home-center">
-        <canvas id="homeArt" class="home-art" aria-hidden="true"></canvas>
-        <p class="home-best" id="homeBest"></p>
-        <p class="home-level" id="homeLevel"></p>
-        <button id="btnPlay" class="btn btn-primary btn-xl">PLAY</button>
-        <button id="btnContinue" class="btn btn-secondary" hidden>CONTINUE</button>
+      <canvas id="homeArt" class="home-art" aria-hidden="true"></canvas>
+      <div class="home-cards">
+        <button id="btnPlay" class="mode-card classic" aria-describedby="homeBest homeLevel">
+          <span class="mc-text"><span class="mc-title">PLAY CLASSIC</span>
+          <span class="mc-sub" id="homeBest"></span>
+          <span class="mc-sub" id="homeLevel"></span></span>
+          <span class="mc-go" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span>
+        </button>
+        <button id="btnContinue" class="btn btn-secondary btn-continue" hidden>CONTINUE CLASSIC</button>
+        <button id="btnDaily" class="mode-card daily" aria-describedby="homeDaily homeStreak">
+          <span class="mc-text"><span class="mc-title">DAILY CHALLENGE</span>
+          <span class="mc-sub" id="homeDaily">Today's challenge awaits</span>
+          <span class="mc-sub" id="homeStreak"></span></span>
+          <span class="mc-go" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><rect x="4" y="5.5" width="16" height="14" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="7.5" y="13" width="3.5" height="3.5" rx=".8" fill="currentColor"/></svg></span>
+        </button>
       </div>
-      <nav class="home-bottom" aria-label="Menu">
-        <button class="btn-icon" id="btnMaterials" aria-label="Materials">
-          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.6" fill="currentColor"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.6" fill="currentColor" opacity=".55"/></svg></span><span>Materials</span></button>
-        <button class="btn-icon" id="btnStats" aria-label="Statistics and achievements">
-          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></span><span>Stats</span></button>
-        <button class="btn-icon" id="btnHow" aria-label="How to play">
-          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9.2 9a3 3 0 1 1 4 2.8c-.8.3-1.2 1-1.2 1.8V14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/></svg></span><span>How to Play</span></button>
-        <button class="btn-icon" id="btnSettings" aria-label="Settings">
-          <span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>Settings</span></button>
+      <nav class="home-nav" aria-label="Menu">
+        <button class="btn-icon" id="btnMaterials"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.6" fill="currentColor"/><rect x="13" y="3.5" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="3.5" y="13" width="7.5" height="7.5" rx="1.6" fill="none" stroke="currentColor" stroke-width="2"/><rect x="13" y="13" width="7.5" height="7.5" rx="1.6" fill="currentColor" opacity=".55"/></svg></span><span>Materials</span></button>
+        <button class="btn-icon" id="btnRankings"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="3.5" y="12" width="5" height="8.5" rx="1.2" fill="currentColor" opacity=".6"/><rect x="9.5" y="6" width="5" height="14.5" rx="1.2" fill="currentColor"/><rect x="15.5" y="9.5" width="5" height="11" rx="1.2" fill="currentColor" opacity=".8"/></svg></span><span>Rankings</span></button>
+        <button class="btn-icon" id="btnAchievements"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M7 4h10v4.5a5 5 0 0 1-10 0z" fill="currentColor"/><path d="M7 6H4.5a3 3 0 0 0 3 4M17 6h2.5a3 3 0 0 1-3 4" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M12 13.5v3.5M8.5 20h7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span><span>Achievements</span></button>
+        <button class="btn-icon" id="btnStats"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M5 20V11M12 20V5M19 20v-6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"/></svg></span><span>Statistics</span></button>
+        <button class="btn-icon" id="btnSettings"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>Settings</span></button>
+        <button class="btn-icon" id="btnHow"><span class="ico"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M9.2 9a3 3 0 1 1 4 2.8c-.8.3-1.2 1-1.2 1.8V14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" fill="none"/><circle cx="12" cy="18" r="1.3" fill="currentColor"/></svg></span><span>How to Play</span></button>
       </nav>
       <footer class="studio"><canvas id="studioOrb" aria-hidden="true"></canvas><span>Cnmbuck Studios</span></footer>
     </section>
@@ -57,7 +64,7 @@
           <span class="score" id="score" aria-live="polite">0</span>
         </div>
         <div class="score-block best" id="bestWrap">
-          <span class="label">PERSONAL BEST</span>
+          <span class="label" id="bestLabel">PERSONAL BEST</span>
           <span class="best-value" id="best">0</span>
         </div>
       </div>
@@ -76,7 +83,9 @@
           <span class="label">COMBO</span>
           <span class="mult" id="comboMult">×1.0</span>
           <span class="meter" id="comboMeter" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+          <span class="shield" id="comboShield" role="img" aria-label="Combo Protection ready"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8 19.5 5.6v5.6c0 4.6-3.1 8.4-7.5 10-4.4-1.6-7.5-5.4-7.5-10V5.6z" fill="currentColor"/><path d="m8.6 12 2.4 2.4 4.6-4.8" stroke="#0C131D" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
         </div>
+        <div class="od-hud" id="odHud" aria-live="polite" hidden></div>
         <div class="chain" id="chain" aria-live="polite"><span class="label">CHAIN</span><span id="chainValue">×0</span></div>
       </div>
       <div class="tutorial" id="tutorial" hidden aria-live="polite">
@@ -87,11 +96,11 @@
       <div class="play-area" id="playArea">
         <canvas id="board" class="board" role="application" aria-label="Game board and piece tray. Drag pieces from the tray onto the board."></canvas>
         <div class="message" id="message" aria-live="assertive"></div>
+        <button class="od-btn" id="btnOverdrive" aria-label="Overdrive charging"></button>
         <button class="rotate-btn" data-slot="0" aria-label="Rotate piece 1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button class="rotate-btn" data-slot="1" aria-label="Rotate piece 2"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button class="rotate-btn" data-slot="2" aria-label="Rotate piece 3"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
-      <p class="game-foot">PLACE · CLEAR · REACT</p>
       <div class="dev-banner" id="devBanner" hidden>Board editor: tap cells to cycle empty, block, Pulse. <button id="btnEditDone">Done</button></div>
     </section>
 
@@ -120,15 +129,77 @@
           <div><dt>Largest clear</dt><dd id="resMaxLines">0</dd></div>
           <div><dt>Highest combo</dt><dd id="resCombo">0</dd></div>
           <div><dt>Biggest chain</dt><dd id="resChain" class="cyan">0</dd></div>
-          <div><dt>Rotations</dt><dd id="resRot">0</dd></div>
-          <div><dt>Time</dt><dd id="resTime">0:00</dd></div>
+          <div><dt>Overdrive</dt><dd id="resOd" class="gold">0</dd></div>
+          <div><dt>Perfect clears</dt><dd id="resPerfect">0</dd></div>
         </dl>
         <p class="res-next" id="resNext"></p>
-        <button class="btn btn-primary btn-xl" id="btnAgain">PLAY AGAIN</button>
-        <div class="row">
-          <button class="btn btn-secondary" id="btnShare">Share Result</button>
+        <button class="btn btn-primary btn-xl" id="btnAgain" data-focus>PLAY AGAIN</button>
+        <div class="row three">
+          <button class="btn btn-secondary" id="btnResDaily">Daily</button>
+          <button class="btn btn-secondary" id="btnShare">Share</button>
           <button class="btn btn-secondary" id="btnResHome">Home</button>
         </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="dailyResults" hidden role="dialog" aria-modal="true" aria-label="Daily Challenge results">
+      <div class="sheet results daily-res">
+        <p class="res-kicker" id="drKicker">DAILY CHALLENGE COMPLETE</p>
+        <p class="dr-date" id="drDate"></p>
+        <div class="res-score" id="drScore">0</div>
+        <p class="res-best" id="drBest"></p>
+        <p class="dr-first" id="drFirst"></p>
+        <dl class="res-grid">
+          <div><dt>Placements</dt><dd id="drPlaced">0</dd></div>
+          <div><dt>Lines</dt><dd id="drLines">0</dd></div>
+          <div><dt>Highest combo</dt><dd id="drCombo">0</dd></div>
+          <div><dt>Biggest chain</dt><dd id="drChain" class="cyan">0</dd></div>
+          <div><dt>Overdrive</dt><dd id="drOd" class="gold">0</dd></div>
+          <div><dt>Completion</dt><dd id="drDone">0%</dd></div>
+          <div><dt>Streak</dt><dd id="drStreak" class="gold">0</dd></div>
+          <div><dt>Rank</dt><dd id="drRank">–</dd></div>
+        </dl>
+        <p class="res-next" id="drNext"></p>
+        <button class="btn btn-primary btn-xl" id="btnDailyAgain" data-focus>PLAY AGAIN</button>
+        <div class="row three">
+          <button class="btn btn-secondary" id="btnDrRank">Rankings</button>
+          <button class="btn btn-secondary" id="btnDrShare">Share</button>
+          <button class="btn btn-secondary" id="btnDrHome">Home</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="overlay" id="dailyHub" hidden role="dialog" aria-modal="true" aria-label="Daily Challenge">
+      <div class="sheet daily-hub">
+        <p class="res-kicker">DAILY CHALLENGE</p>
+        <h2 id="dhDate"></h2>
+        <p class="dh-status" id="dhStatus"></p>
+        <dl class="stat-grid dh-stats" id="dhStats"></dl>
+        <div class="cal" aria-label="Daily Challenge calendar">
+          <div class="cal-head"><button class="cal-nav" id="calPrev" aria-label="Previous month">‹</button><span id="calMonth"></span><button class="cal-nav" id="calNext" aria-label="Next month">›</button></div>
+          <div class="cal-grid" id="calGrid"></div>
+          <div class="cal-key"><span><i class="k-done"></i>Completed</span><span><i class="k-today"></i>Today</span><span><i class="k-missed"></i>Missed</span></div>
+        </div>
+        <p class="dh-rules">30 placements · the same board and pieces for everyone · no timer</p>
+        <p class="dh-next" id="dhNext"></p>
+        <button class="btn btn-primary btn-xl" id="btnDailyStart" data-focus>START</button>
+        <button class="btn btn-ghost" data-close>Close</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="rankings" hidden role="dialog" aria-modal="true" aria-label="Rankings">
+      <div class="sheet">
+        <h2>Rankings</h2>
+        <div class="seg rank-tabs" role="tablist">
+          <button class="seg-btn" data-board="classic" role="tab">Classic</button>
+          <button class="seg-btn" data-board="level" role="tab">Level</button>
+          <button class="seg-btn" data-board="chain" role="tab">Chain</button>
+          <button class="seg-btn" data-board="daily" role="tab">Daily</button>
+        </div>
+        <p class="mat-note" id="rankNote"></p>
+        <div class="scroll"><ol class="rank-list" id="rankList"></ol></div>
+        <button class="btn btn-secondary" id="btnGameCenter" hidden>Open Game Center</button>
+        <button class="btn btn-primary" data-close>DONE</button>
       </div>
     </div>
 
@@ -167,7 +238,11 @@
           <li><span class="pulse-chip" aria-hidden="true">◆</span> <b>Pulse Blocks</b> clear the 8 cells around them when their line clears. A blast that hits another Pulse sets it off too.</li>
           <li><span class="rot-chip" aria-hidden="true">⟳</span> <b>Rotate</b> a piece with its button. Each turn uses 1 Rotation Energy; each line you clear restores 1, up to 3.</li>
           <li><b>Level up</b> as your score grows. Each level refills your Rotation Energy, brings tougher pieces and, every two levels, a new block material.</li>
-          <li>The game ends when none of your pieces fit, even with the rotations you can afford.</li>
+          <li><span class="shield-chip" aria-hidden="true">✓</span> <b>Combo Protection</b> lets an active combo survive one placement that clears nothing. Clear again to restore it.</li>
+          <li><span class="od-chip" aria-hidden="true">2×</span> <b>Overdrive</b> charges as you clear lines, fire Pulses and empty the board. When it reads READY, tap it: your next five placements score double and rotations are free.</li>
+          <li><b>Perfect Clear</b>: empty the whole board in one move for a 2,000 point bonus.</li>
+          <li><b>Daily Challenge</b>: everyone gets the same board and pieces each day. You have 30 placements to score as much as you can.</li>
+          <li>The game ends when none of your pieces fit, even with the rotations you can afford. A charged Overdrive keeps it going if its free rotations would open a move.</li>
         </ol>
         <button class="btn btn-primary" id="btnTutorial">PLAY THE TUTORIAL</button>
         <button class="btn btn-ghost" data-close>Close</button>
@@ -178,6 +253,9 @@
       <div class="sheet">
         <h2>Settings</h2>
         <label class="toggle"><span>Sound effects</span><input type="checkbox" id="setSound" /><i></i></label>
+        <label class="field vol"><span>Effects volume</span><input id="setSfxVol" type="range" min="0" max="1" step="0.05" aria-label="Sound effects volume" /></label>
+        <label class="toggle"><span>Music</span><input type="checkbox" id="setMusic" /><i></i></label>
+        <label class="field vol"><span>Music volume</span><input id="setMusicVol" type="range" min="0" max="1" step="0.05" aria-label="Music volume" /></label>
         <label class="toggle"><span>Haptics</span><input type="checkbox" id="setHaptics" /><i></i></label>
         <label class="toggle"><span>Reduced motion</span><input type="checkbox" id="setMotion" /><i></i></label>
         <label class="toggle"><span>High contrast</span><input type="checkbox" id="setContrast" /><i></i></label>
@@ -192,6 +270,14 @@
           <label class="field"><span>Single clear</span><input id="devClear" type="range" min="200" max="350" step="10" /><output id="devClearOut"></output></label>
           <label class="field"><span>Particles</span><select id="devParticles"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <label class="field"><span>Haptic intensity</span><select id="devHaptic"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <h3>Build 4 balance</h3>
+          <label class="field"><span>Combo protection</span><select id="devProtect"><option value="0">Off</option><option value="1">1 move</option><option value="2">2 moves</option></select></label>
+          <label class="field"><span>Overdrive length</span><select id="devOdDur"><option value="3">3 placements</option><option value="5">5 placements</option><option value="7">7 placements</option></select></label>
+          <label class="field"><span>Overdrive points</span><select id="devOdMult"><option value="1.5">1.5×</option><option value="2">2×</option><option value="2.5">2.5×</option></select></label>
+          <label class="field"><span>Overdrive rotation</span><select id="devOdRot"><option value="free">Unlimited (free)</option><option value="limited">Limited (3 free)</option><option value="reduced">Reduced cost</option><option value="none">No benefit</option></select></label>
+          <label class="field"><span>Scoring ruleset</span><select id="devRuleset"><option value="2">Ruleset 2 (Build 4)</option><option value="1">Ruleset 1 (Builds 1–3)</option></select></label>
+          <label class="field"><span>Daily placements</span><input id="devDailyLimit" type="number" min="5" max="60" /></label>
+          <label class="field"><span>Daily date (UTC)</span><input id="devDailyDate" type="date" /></label>
           <label class="field"><span>Level-up energy</span><select id="devLevelEnergy"><option value="full">Full restore</option><option value="one">One charge</option><option value="none">None</option></select></label>
           <label class="field"><span>Level-up length</span><input id="devLevelMs" type="range" min="700" max="1200" step="50" /><output id="devLevelMsOut"></output></label>
           <label class="field"><span>Material wave</span><input id="devMatMs" type="range" min="400" max="700" step="50" /><output id="devMatMsOut"></output></label>
@@ -200,20 +286,33 @@
           <label class="field"><span>Edge highlight</span><input id="devEdge" type="range" min="0" max="2" step="0.1" /><output id="devEdgeOut"></output></label>
           <label class="field"><span>Pulse glow</span><input id="devGlow" type="range" min="0.3" max="1.8" step="0.1" /><output id="devGlowOut"></output></label>
           <label class="field"><span>Energy waves</span><input id="devWave" type="range" min="0.3" max="1.8" step="0.1" /><output id="devWaveOut"></output></label>
+          <label class="field"><span>Bevel depth</span><input id="devDepth" type="range" min="0" max="2" step="0.1" /><output id="devDepthOut"></output></label>
+          <label class="field"><span>Contact shadow</span><input id="devShadow" type="range" min="0" max="2" step="0.1" /><output id="devShadowOut"></output></label>
+          <label class="field"><span>Board light</span><input id="devBoardLight" type="range" min="0" max="2" step="0.1" /><output id="devBoardLightOut"></output></label>
+          <label class="field"><span>Overdrive light</span><input id="devOdLight" type="range" min="0.3" max="1.8" step="0.1" /><output id="devOdLightOut"></output></label>
           <p class="dev-note">Rotation and progression settings apply from the next game.</p>
           <details class="dev-json">
-            <summary>Advanced: levels, difficulty, materials, scoring (JSON)</summary>
+            <summary>Advanced: levels, difficulty, materials, scoring, Overdrive charging, Daily (JSON)</summary>
             <textarea id="devJson" rows="12" spellcheck="false"></textarea>
             <div class="row"><button class="btn btn-secondary" id="devJsonApply">Apply</button><button class="btn btn-ghost" id="devJsonReset">Defaults</button></div>
           </details>
           <label class="field"><span>Scenario</span><select id="devScenario"></select></label>
           <button class="btn btn-secondary" id="devLoad">Load scenario</button>
           <button class="btn btn-secondary" id="devEdit">Board editor</button>
+          <h3>Testing</h3>
+          <div class="row"><label class="field grow"><span>Score</span><input id="devSetScore" type="number" min="0" step="100" /></label><button class="btn btn-secondary btn-sm" id="devApplyScore">Set</button></div>
+          <div class="row"><label class="field grow"><span>Level</span><input id="devSetLevel" type="number" min="1" max="40" /></label><button class="btn btn-secondary btn-sm" id="devApplyLevel">Set</button></div>
+          <div class="row"><label class="field grow"><span>Energy</span><input id="devSetEnergy" type="number" min="0" max="9" /></label><button class="btn btn-secondary btn-sm" id="devApplyEnergy">Set</button></div>
+          <div class="row"><label class="field grow"><span>Overdrive %</span><input id="devSetOd" type="number" min="0" max="100" step="10" /></label><button class="btn btn-secondary btn-sm" id="devApplyOd">Set</button></div>
+          <button class="btn btn-secondary" id="devActivateOd">Activate Overdrive now</button>
+          <button class="btn btn-secondary" id="devPieces">Load piece sequence (Daily order)</button>
+          <button class="btn btn-secondary" id="devValidate">Validate next 30 Daily Challenges</button>
+          <button class="btn btn-secondary" id="devTestAch">Test achievement unlock</button>
           <button class="btn btn-secondary" id="devExport">Export analytics</button>
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
         <button class="btn btn-primary" data-close>DONE</button>
-        <p class="version" id="version">BLOQ Build 3</p>
+        <p class="version" id="version">BLOQ Build 4</p>
       </div>
     </div>
 

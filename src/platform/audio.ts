@@ -4,9 +4,21 @@
 
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
+/** Build 4: sound effects and music have separate levels. */
+let sfxBus: GainNode | null = null;
+let musicBus: GainNode | null = null;
 let enabled = true;
+let sfxVolume = 0.8;
+let musicVolume = 0.5;
+let musicOn = true;
 
 export function setSoundEnabled(on: boolean) { enabled = on; }
+export function setSfxVolume(v: number) { sfxVolume = Math.max(0, Math.min(1, v)); if (sfxBus && ctx) sfxBus.gain.setTargetAtTime(sfxVolume, ctx.currentTime, 0.05); }
+export function setMusicVolume(v: number) { musicVolume = Math.max(0, Math.min(1, v)); applyMusicLevel(); }
+export function setMusicEnabled(on: boolean) { musicOn = on; applyMusicLevel(); if (on) music.start(); }
+function applyMusicLevel() {
+  if (musicBus && ctx) musicBus.gain.setTargetAtTime(musicOn ? musicVolume * 0.55 : 0, ctx.currentTime, 0.4);
+}
 
 /** iOS only starts audio from a user gesture: call this from the first touch. */
 export function unlockAudio() {
@@ -23,21 +35,27 @@ export function unlockAudio() {
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -18; comp.ratio.value = 4;
     master.connect(comp).connect(ctx.destination);
+    sfxBus = ctx.createGain(); sfxBus.gain.value = sfxVolume; sfxBus.connect(master);
+    musicBus = ctx.createGain(); musicBus.gain.value = 0; musicBus.connect(master);
+    applyMusicLevel();
   }
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  if (musicOn) music.start();
 }
 
 export function suspendAudio() { ctx?.suspend().catch(() => {}); }
 
-interface ToneOpts { type?: OscillatorType; gain?: number; to?: number; attack?: number; filter?: number }
+interface ToneOpts { type?: OscillatorType; gain?: number; to?: number; attack?: number; filter?: number; out?: AudioNode | null; at?: number; detune?: number }
 
 function tone(freq: number, start: number, dur: number, o: ToneOpts = {}) {
-  if (!ctx || !master) return;
-  const t = ctx.currentTime + start;
+  const out = o.out ?? sfxBus;
+  if (!ctx || !out) return;
+  const t = o.at ?? ctx.currentTime + start;
   const osc = ctx.createOscillator();
   const g = ctx.createGain();
   osc.type = o.type ?? 'sine';
   osc.frequency.setValueAtTime(freq, t);
+  if (o.detune) osc.detune.value = o.detune;
   if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + dur);
   const peak = o.gain ?? 0.2;
   g.gain.setValueAtTime(0.0001, t);
@@ -48,13 +66,13 @@ function tone(freq: number, start: number, dur: number, o: ToneOpts = {}) {
     const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.filter;
     node = osc.connect(f);
   }
-  node.connect(g).connect(master);
+  node.connect(g).connect(out);
   osc.start(t); osc.stop(t + dur + 0.03);
 }
 
-function noise(start: number, dur: number, gain: number, from: number, to = from, q = 1.2) {
-  if (!ctx || !master) return;
-  const t = ctx.currentTime + start;
+function noise(start: number, dur: number, gain: number, from: number, to = from, q = 1.2, out: AudioNode | null = sfxBus, at?: number) {
+  if (!ctx || !out) return;
+  const t = at ?? ctx.currentTime + start;
   const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
   const buf = ctx.createBuffer(1, len, ctx.sampleRate);
   const d = buf.getChannelData(0);
@@ -64,9 +82,20 @@ function noise(start: number, dur: number, gain: number, from: number, to = from
   f.frequency.setValueAtTime(from, t);
   if (to !== from) f.frequency.exponentialRampToValueAtTime(to, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  src.connect(f).connect(g).connect(master);
+  src.connect(f).connect(g).connect(out);
   src.start(t);
 }
+
+// Overlap limiting: the same sound retriggered within a few ms is skipped, so fast chains never pile up.
+const lastPlayed = new Map<string, number>();
+function throttle(key: string, ms: number): boolean {
+  const now = performance.now();
+  if (now - (lastPlayed.get(key) ?? -1e9) < ms) return false;
+  lastPlayed.set(key, now);
+  return true;
+}
+/** Small random detune so repeated sounds never feel identical. */
+const vary = (f: number, cents = 18) => f * Math.pow(2, ((Math.random() * 2 - 1) * cents) / 1200);
 
 /** A struck metal plate: a few inharmonic partials with fast decay. */
 function metal(base: number, start: number, dur: number, gain: number) {
@@ -79,13 +108,15 @@ const LADDER = [440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.
 
 export const sfx = {
   /** Soft electronic click. */
-  select() { if (!ready()) return; tone(2200, 0, 0.03, { type: 'square', gain: 0.025, filter: 3500 }); },
+  select() { if (!ready() || !throttle('select', 40)) return; tone(vary(2200), 0, 0.03, { type: 'square', gain: 0.025, filter: 3500 }); },
   /** Satisfying metallic snap. */
   place() {
-    if (!ready()) return;
-    noise(0, 0.03, 0.18, 3800);
-    metal(410, 0, 0.12, 0.09);
+    if (!ready() || !throttle('place', 40)) return;
+    noise(0, 0.03, 0.18, vary(3800, 60));
+    metal(vary(410, 30), 0, 0.12, 0.09);
     tone(120, 0, 0.07, { type: 'sine', gain: 0.22, to: 70 });
+    // a second, softer detent as the block settles (mechanical lock)
+    metal(vary(620, 30), 0.07, 0.05, 0.03);
   },
   /** Precision mechanical movement: a servo glide between two detents. */
   rotate() {
@@ -109,7 +140,7 @@ export const sfx = {
   },
   /** Line clear: an energy sweep; more lines add layers, combos lift the pitch. */
   clear(lines: number, combo: number) {
-    if (!ready()) return;
+    if (!ready() || !throttle('clear', 60)) return;
     const lift = Math.min(combo - 1, 4);
     noise(0, 0.22 + lines * 0.03, 0.07 + lines * 0.02, 700, 5200, 2);
     tone(LADDER[lift], 0, 0.28, { type: 'sine', gain: 0.1, to: LADDER[lift] * 1.5 });
@@ -122,7 +153,7 @@ export const sfx = {
   },
   /** Focused electronic burst; each wave in a chain rises and thickens. */
   pulse(wave: number, count: number) {
-    if (!ready()) return;
+    if (!ready() || !throttle('pulse' + wave, 50)) return;
     const lift = Math.pow(1.122, Math.min(wave, 8));
     tone(95 * lift, 0, 0.3, { type: 'sine', gain: 0.3, to: 48 * lift });
     tone(1320 * lift, 0, 0.12, { type: 'square', gain: 0.02 + Math.min(count, 4) * 0.006, to: 660 * lift, filter: 4000 });
@@ -181,9 +212,144 @@ export const sfx = {
     noise(0, 0.7, 0.07 + Math.min(count - 4, 3) * 0.02, 5000, 400, 0.8);
     [0, 4, 7].forEach((n, i) => tone(LADDER[n + 3], 0.05 + i * 0.04, 0.5, { type: 'sine', gain: 0.05 }));
   },
+  // ---- Build 4 signature sounds
+  /** Combo Protection spent: a soft guarded chime. */
+  shield() {
+    if (!ready()) return;
+    tone(LADDER[4], 0, 0.22, { type: 'triangle', gain: 0.05 });
+    tone(LADDER[4] * 1.5, 0.06, 0.3, { type: 'sine', gain: 0.04 });
+    noise(0, 0.12, 0.03, 3000, 1800, 3);
+  },
+  /** Combo Protection restored by a clear. */
+  shieldRestore() { if (!ready()) return; tone(LADDER[6], 0, 0.12, { type: 'sine', gain: 0.035, to: LADDER[7] }); },
+  /** Overdrive charging: a short rising shimmer, pitched by the meter level. */
+  odCharge(level: number) {
+    if (!ready() || !throttle('odc', 120)) return;
+    const f = 300 + level * 7;
+    tone(f, 0, 0.18, { type: 'sine', gain: 0.04, to: f * 1.5 });
+  },
+  /** Overdrive ready: the signature motif (rising fifths with a gold shimmer). */
+  odReady() {
+    if (!ready()) return;
+    [[0, 0], [4, 0.09], [7, 0.18]].forEach(([n, at]) => tone(LADDER[n] * 0.5, at, 0.5, { type: 'sawtooth', gain: 0.03, filter: 1800 }));
+    tone(LADDER[9], 0.27, 0.6, { type: 'sine', gain: 0.05 });
+    noise(0.2, 0.5, 0.03, 6000, 9000, 2);
+  },
+  /** Overdrive activation: a deep charge and release with a bright chord on top. */
+  odActivate() {
+    if (!ready()) return;
+    tone(55, 0, 0.8, { type: 'sine', gain: 0.3, to: 110 });
+    noise(0, 0.6, 0.08, 300, 7000, 1);
+    tone(220, 0, 0.5, { type: 'sawtooth', gain: 0.04, to: 880, filter: 2600 });
+    [4, 7, 9].forEach((n, i) => tone(LADDER[n], 0.42 + i * 0.03, 0.6, { type: 'triangle', gain: 0.05 }));
+  },
+  /** Overdrive ended: energy released and settling down. */
+  odEnd() {
+    if (!ready()) return;
+    tone(880, 0, 0.6, { type: 'sine', gain: 0.04, to: 330 });
+    noise(0, 0.5, 0.04, 5000, 500, 1);
+  },
+  /** Perfect board clear: a big gold-and-cyan cascade. */
+  perfect() {
+    if (!ready()) return;
+    tone(65, 0, 0.7, { type: 'sine', gain: 0.25, to: 40 });
+    [0, 2, 4, 5, 7, 9, 10].forEach((n, i) => tone(LADDER[n], i * 0.055, 0.45, { type: 'triangle', gain: 0.055 }));
+    [7, 9, 10].forEach((n) => tone(LADDER[n], 0.42, 1, { type: 'sine', gain: 0.05 }));
+    noise(0.05, 0.9, 0.05, 1200, 9000, 0.9);
+  },
+  /** Combo built higher: ascending tick, one step per combo level. */
+  comboUp(combo: number) {
+    if (!ready() || combo < 2) return;
+    tone(LADDER[Math.min(2 + combo, LADDER.length - 1)] * 2, 0.12, 0.12, { type: 'sine', gain: 0.03 });
+  },
   gameOver() {
     if (!ready()) return;
     [659.25, 523.25, 440, 329.63].forEach((f, i) => tone(f, i * 0.15, 0.5, { type: 'sine', gain: 0.08 }));
     noise(0, 0.6, 0.03, 1200, 300);
   },
 };
+
+// ---------------------------------------------------------------- Build 4 ambient music
+// A slow generative loop: a soft pad on a four-chord cycle and a muted arpeggio. During Overdrive a second layer
+// fades in (sub pulse, off-beat hats, a faster brighter arpeggio) and fades out when it ends. Synthesised live.
+
+const CHORDS = [
+  [220, 261.63, 329.63, 392], // Am7
+  [174.61, 220, 261.63, 329.63], // Fmaj7
+  [196, 246.94, 293.66, 392], // G
+  [164.81, 207.65, 246.94, 329.63], // E (sus colour via the arp)
+];
+const BPM = 92;
+const STEP = 60 / BPM / 4; // 16th note
+
+class Music {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private next = 0;
+  private step = 0;
+  private intensity = 0;
+  private odGain: GainNode | null = null;
+  private baseGain: GainNode | null = null;
+  private filter: BiquadFilterNode | null = null;
+
+  private ensure() {
+    if (!ctx || !musicBus || this.baseGain) return;
+    this.filter = ctx.createBiquadFilter(); this.filter.type = 'lowpass'; this.filter.frequency.value = 1100; this.filter.Q.value = 0.7;
+    this.baseGain = ctx.createGain(); this.baseGain.gain.value = 1;
+    this.odGain = ctx.createGain(); this.odGain.gain.value = 0;
+    this.baseGain.connect(this.filter).connect(musicBus);
+    this.odGain.connect(musicBus);
+  }
+
+  start() {
+    if (!ctx || !musicOn || this.timer) return;
+    this.ensure();
+    this.next = ctx.currentTime + 0.1;
+    this.timer = setInterval(() => this.schedule(), 60);
+  }
+
+  stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } }
+
+  /** 0 = ambient, 1 = Overdrive. Transitions smoothly. */
+  setIntensity(v: number) {
+    this.intensity = v;
+    if (!ctx || !this.odGain || !this.filter) return;
+    this.odGain.gain.setTargetAtTime(v ? 0.9 : 0, ctx.currentTime, 0.6);
+    this.filter.frequency.setTargetAtTime(v ? 2600 : 1100, ctx.currentTime, 0.8);
+  }
+
+  private schedule() {
+    if (!ctx || ctx.state !== 'running' || !musicOn) return;
+    while (this.next < ctx.currentTime + 0.25) {
+      this.play(this.step, this.next);
+      this.step = (this.step + 1) % (16 * 8);
+      this.next += STEP;
+    }
+  }
+
+  private play(step: number, at: number) {
+    const bar = Math.floor(step / 16), inBar = step % 16;
+    const chord = CHORDS[Math.floor(bar / 2) % CHORDS.length];
+    const base = this.baseGain, od = this.odGain;
+    // Pad: a new chord every two bars, long attack and release.
+    if (step % 32 === 0) {
+      for (const f of chord) {
+        tone(f / 2, 0, STEP * 32 + 1.2, { type: 'triangle', gain: 0.05, attack: 1.2, out: base, at });
+        tone(f / 2, 0, STEP * 32 + 1.2, { type: 'sawtooth', gain: 0.012, attack: 1.4, out: base, at, detune: 7 });
+      }
+    }
+    // Muted arpeggio on eighths (sixteenths during Overdrive).
+    const arpEvery = this.intensity ? 1 : 2;
+    if (inBar % arpEvery === 0) {
+      const idx = [0, 2, 1, 3, 2, 1, 3, 0][(inBar / arpEvery) % 8];
+      const f = chord[idx] * (this.intensity ? 2 : 1);
+      tone(f, 0, 0.22, { type: 'triangle', gain: this.intensity ? 0.022 : 0.018, out: base, at });
+    }
+    if (!od || !this.intensity) return;
+    // Overdrive layer: sub pulse on the beat, airy hats on the off-beats.
+    if (inBar % 4 === 0) tone(chord[0] / 4, 0, 0.28, { type: 'sine', gain: 0.12, to: chord[0] / 6, out: od, at });
+    if (inBar % 4 === 2) noise(0, 0.05, 0.035, 8000, 8000, 1.5, od, at);
+    if (inBar % 8 === 6) tone(chord[3], 0, 0.3, { type: 'sawtooth', gain: 0.012, filter: 2400, out: od, at });
+  }
+}
+
+export const music = new Music();

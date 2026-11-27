@@ -18,8 +18,8 @@ export interface Charge { k: number; start: number; dur: number }
 export interface Bolt { fr: number; fc: number; tr: number; tc: number; start: number; dur: number; seed: number }
 export interface Sweep { kind: 'row' | 'col'; i: number; origin: number; start: number; dur: number; strength: number }
 export interface Flare { r: number; c: number; start: number; dur: number }
-export interface Particle { x: number; y: number; vx: number; vy: number; born: number; life: number; size: number; hue: 'ti' | 'cyan' | 'white'; spin: number }
-export interface FloatText { text: string; r: number; c: number; start: number; dur: number; big: boolean }
+export interface Particle { x: number; y: number; vx: number; vy: number; born: number; life: number; size: number; hue: 'ti' | 'cyan' | 'white' | 'gold'; spin: number }
+export interface FloatText { text: string; r: number; c: number; start: number; dur: number; big: boolean; /** Build 4: subtle placement points. */ minor?: boolean; gold?: boolean }
 export interface EnergyOrb { r: number; c: number; seg: number; start: number; dur: number; gold?: boolean }
 /** Build 3: a material change sweeps across the board from `origin` (cell units). */
 export interface MaterialWave { from: MaterialLook; to: MaterialLook; start: number; dur: number; or: number; oc: number }
@@ -41,6 +41,8 @@ export interface PlayOptions {
   levelMs?: number;
   /** Material wave length in ms (400–700, dev-tunable). */
   materialMs?: number;
+  /** Build 4: this move was played in Overdrive (gold-tinted, stronger clear and Pulse effects). */
+  overdrive?: boolean;
 }
 
 export class Animator {
@@ -61,6 +63,13 @@ export class Animator {
   /** Frame celebration: cyan for 4+ lines, champagne gold for a level-up. */
   celebrate: { start: number; dur: number; gold?: boolean } | null = null;
   materialWave: MaterialWave | null = null;
+  /** Build 4: placed cells' contact highlight, the Perfect Clear wave, Overdrive activation and board flashes. */
+  contact: { cells: number[]; start: number; dur: number } | null = null;
+  perfectWave: { start: number; dur: number } | null = null;
+  odWave: { start: number; dur: number } | null = null;
+  flash: { start: number; dur: number; color: string; amount: number } | null = null;
+  /** The current sequence is an Overdrive move. */
+  odMove = false;
   shake: { start: number; dur: number; amp: number } | null = null;
   /** Restored charges still in flight to the meter (the meter shows state energy minus these). */
   pendingEnergy = 0;
@@ -83,7 +92,8 @@ export class Animator {
   /** True while anything is still moving on screen (keeps the render loop alive). */
   get active() {
     return this.busy || this.dying.length > 0 || this.particles.length > 0 || this.shocks.length > 0 || this.floats.length > 0
-      || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0 || !!this.materialWave || this.arrivals.length > 0;
+      || this.settles.size > 0 || !!this.shake || !!this.glowCells || this.orbs.length > 0 || this.bolts.length > 0 || !!this.celebrate || this.flares.length > 0 || !!this.materialWave || this.arrivals.length > 0
+      || !!this.contact || !!this.perfectWave || !!this.odWave || !!this.flash;
   }
 
   play(result: MoveResult, now: number, hooks: AnimationHooks, opts: PlayOptions = {}) {
@@ -95,11 +105,21 @@ export class Animator {
     const k = (this.reduced ? 0.65 : 1) * this.speed;
     const T = (ms: number) => now + ms * k;
     for (const p of result.placed) this.settles.set(p, now);
+    this.odMove = !!opts.overdrive;
+    // Contact highlight along the placed piece as it locks in (100–150 ms).
+    this.contact = { cells: result.placed, start: now + 40, dur: 130 };
     // Restored charges stay off the meter until their energy arrives (lines first, then any level-up).
     this.pendingEnergy = result.energyGained + (result.levelEnergy ?? 0);
 
     const lines = result.rows.length + result.cols.length;
     if (lines === 0) {
+      // Placement points: small and quiet for an ordinary move.
+      if (this.showPoints && result.points.total > 0) {
+        const n0 = result.boardAfterPlace.size;
+        const r0 = result.placed.reduce((a, p) => a + Math.floor(p / n0), 0) / result.placed.length;
+        const c0 = result.placed.reduce((a, p) => a + (p % n0), 0) / result.placed.length;
+        this.floats.push({ text: `+${result.points.total.toLocaleString('en-US')}`, r: r0 - 0.2, c: c0, start: now + 60, dur: 620, big: false, minor: true, gold: this.odMove });
+      }
       this.finishWith(result, T(100), now, opts);
       return;
     }
@@ -124,7 +144,7 @@ export class Animator {
     const clearAt = multi ? 240 : 190;
     this.at(T(clearAt), () => {
       this.kill(result.lineCells, T(clearAt), 150 * k, result.boardAfterPlace, T(clearAt - 70), lines >= 3 ? 1.4 : 1);
-      if (this.showPoints) this.floats.push({ text: `+${result.points.total}`, r: midR, c: midC, start: T(clearAt), dur: 950, big: result.points.total >= 500 });
+      if (this.showPoints) this.floats.push({ text: `+${result.points.total.toLocaleString('en-US')}`, r: midR, c: midC, start: T(clearAt), dur: 950, big: result.points.total >= 1000 || lines >= 2, gold: this.odMove || result.perfect });
       this.hooks.onLines?.(result);
       if (!this.reduced && lines >= 3) this.shake = { start: T(clearAt), dur: 220, amp: Math.min(1.5 + lines * 0.6, 4.5) };
       // energy orbs: one per restored charge, from the cleared lines to the meter segments that light up
@@ -136,6 +156,17 @@ export class Animator {
         this.orbs.push(orb);
       }
     });
+
+    // Perfect Board Clear: a gold-and-cyan wave from the centre once the last block has gone (800–1200 ms).
+    const perfectAt = (result.waves.length ? clearAt - 60 + result.waves.length * 260 : clearAt) + 120;
+    if (result.perfect) {
+      this.at(T(perfectAt), () => {
+        this.perfectWave = { start: T(perfectAt), dur: (this.reduced ? 600 : 1000) * k };
+        this.flash = { start: T(perfectAt), dur: 420, color: '#FFF3D1', amount: 0.22 };
+        this.celebrate = { start: T(perfectAt), dur: 900 * k, gold: true };
+        if (!this.reduced) this.burst(3.5, 3.5, 46, 'gold', T(perfectAt));
+      });
+    }
 
     // Pulse waves
     let t = clearAt - 60;
@@ -159,11 +190,33 @@ export class Animator {
         this.hooks.onWave?.(i, wave, result);
         // 4+ Pulse chains get the frame celebration too (audiovisual only; the blast radius never changes).
         if (i === result.waves.length - 1 && result.chain >= 4) this.celebrate = { start: T(shockAt), dur: (result.chain >= 5 ? 950 : 750) * k };
+        // 5+ chains: a cinematic board-wide flash on the final wave.
+        if (i === result.waves.length - 1 && result.chain >= 5) this.flash = { start: T(shockAt), dur: 380, color: '#C6FFFF', amount: 0.16 };
         if (!this.reduced && (i >= 1 || wave.pulses.length > 1)) this.shake = { start: T(shockAt), dur: 200, amp: Math.min(1.5 + i * 1.2, 5) };
       });
       t = shockAt + 170;
     });
-    this.finishWith(result, T(Math.max(t, clearAt + 150) + 80), now, opts);
+    this.finishWith(result, T(Math.max(t, clearAt + 150, result.perfect ? perfectAt + 700 : 0) + 80), now, opts);
+  }
+
+  /** Build 4: Overdrive activation (600–900 ms): a gold wave round the board and a soft flash. Not a move. */
+  overdrive(now: number) {
+    const dur = this.reduced ? 450 : 780;
+    this.odWave = { start: now, dur };
+    this.celebrate = { start: now, dur, gold: true };
+    this.flash = { start: now, dur: 360, color: '#E6C47E', amount: 0.14 };
+    if (!this.reduced) {
+      for (const [r, c] of [[0, 0], [0, 7], [7, 0], [7, 7]]) this.burst(r + 0.5, c + 0.5, 10, 'gold', now + 120);
+    }
+  }
+
+  private burst(r: number, c: number, count: number, hue: Particle['hue'], start: number) {
+    for (let i = 0; i < Math.round(count * this.particleScale); i++) {
+      const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 5;
+      this.particles.push({ x: c, y: r, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.8, born: start, life: 420 + Math.random() * 420, size: 0.05 + Math.random() * 0.08, hue: i % 3 === 0 ? 'cyan' : hue, spin: Math.random() * 6 });
+    }
+    // Keep particle counts bounded on long chains.
+    if (this.particles.length > 600) this.particles.splice(0, this.particles.length - 600);
   }
 
   /** Ends the sequence at `end`, or first plays the level-up phase when this move gained a level. */
@@ -203,14 +256,15 @@ export class Animator {
       this.hidden.add(k);
       this.dying.push({ k, cell, start, dur, brightFrom });
       if (this.reduced) continue;
-      const count = Math.round((cell.pulse ? 12 : 7) * this.particleScale * intensity);
+      if (this.particles.length > 600) continue;
+      const count = Math.round((cell.pulse ? 12 : 7) * this.particleScale * intensity * (this.odMove ? 1.3 : 1));
       const r = Math.floor(k / n), c = k % n;
       for (let i = 0; i < count; i++) {
         const a = Math.random() * Math.PI * 2, sp = 1.2 + Math.random() * 2.8 * intensity;
         this.particles.push({
           x: c + 0.2 + Math.random() * 0.6, y: r + 0.2 + Math.random() * 0.6, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.6,
           born: start, life: 260 + Math.random() * 260, size: 0.06 + Math.random() * 0.09,
-          hue: cell.pulse ? 'cyan' : i % 3 === 0 ? 'white' : 'ti', spin: Math.random() * 6,
+          hue: cell.pulse ? 'cyan' : i % 3 === 0 ? 'white' : this.odMove && i % 3 === 1 ? 'gold' : 'ti', spin: Math.random() * 6,
         });
       }
     }
@@ -257,6 +311,10 @@ export class Animator {
     if (this.celebrate && now > this.celebrate.start + this.celebrate.dur) this.celebrate = null;
     if (this.materialWave && now > this.materialWave.start + this.materialWave.dur) { setMaterial(this.materialWave.to); this.materialWave = null; }
     if (this.shake && now > this.shake.start + this.shake.dur) this.shake = null;
+    if (this.contact && now > this.contact.start + this.contact.dur) this.contact = null;
+    if (this.perfectWave && now > this.perfectWave.start + this.perfectWave.dur) this.perfectWave = null;
+    if (this.odWave && now > this.odWave.start + this.odWave.dur) this.odWave = null;
+    if (this.flash && now > this.flash.start + this.flash.dur) this.flash = null;
     const s = Math.min(dt, 50) / 1000;
     this.particles = this.particles.filter((p) => {
       if (now < p.born) return true;

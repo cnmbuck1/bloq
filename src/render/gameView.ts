@@ -17,6 +17,8 @@ export interface Layout {
   pitch: number; cell: number; gap: number;
   energyY: number; energyH: number;
   trayTop: number; trayH: number; slotW: number; slotH: number; slotGap: number; trayLeft: number; trayCell: number;
+  /** Build 4: tray width (the Overdrive meter and Rotation Energy share one row across it). */
+  trayW: number;
 }
 
 export interface DragState {
@@ -60,6 +62,12 @@ export class GameView {
   /** Meter feedback: a segment draining (rotation) or a denied attempt. */
   drain: { seg: number; start: number } | null = null;
   denied = 0;
+  /** Build 4: Overdrive meter feedback (charge gained, ready, held-off game over) and the shield indicator. */
+  odPulse = 0;
+  odAvailable = false;
+  /** Meter value being shown (animates up to the state's charge). */
+  private odShown = 0;
+  private bgCache: HTMLCanvasElement | null = null;
   private dpr = 1;
   private boardBg: HTMLCanvasElement | null = null;
 
@@ -76,10 +84,11 @@ export class GameView {
     setRenderScale(this.dpr);
 
     const side = 12;
-    // Board ~61% of the canvas, meter ~7%, tray the rest (Build 3: tray pieces 10–15% larger than Build 2).
-    const energyH = Math.max(34, Math.min(48, H * 0.072));
-    const minTray = Math.max(112, H * 0.29);
-    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.625));
+    // Build 4: the board keeps its Build 3 size; Overdrive and Rotation Energy share one compact row, and the tray
+    // takes the space the old footer tagline used, so tray pieces grow 15–20%.
+    const energyH = Math.max(34, Math.min(46, H * 0.068));
+    const minTray = Math.max(124, H * 0.3);
+    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.6));
     const frame = Math.max(6, boardPx * 0.026);
     const pad = frame + Math.max(3, boardPx * 0.008);
     const pitch = (boardPx - pad * 2) / 8;
@@ -91,14 +100,15 @@ export class GameView {
     const trayH = Math.max(90, H - trayTop - 4);
     const slotGap = Math.max(8, boardPx * 0.025);
     // The tray may run a little wider than the board (up to the screen gutter) so pieces can grow.
-    const trayW = Math.min(W - side * 2, boardPx * 1.14);
+    const trayW = Math.min(W - side * 2, boardPx * 1.16);
     const trayLeft = (W - trayW) / 2;
     const slotW = (trayW - slotGap * 2) / 3;
     const slotH = Math.min(trayH - 28, slotW * 1.2);
     // Miniature cell size based on 3-cell spans (most pieces); longer pieces shrink only as far as they must.
-    const trayCell = Math.min(pitch * 0.8, (slotW * 0.92) / 3.2, ((slotH - ROTATE_OVERLAP) * 0.93) / 3);
-    this.layout = { W, H, bx, by, boardPx, frame, pad, pitch, cell: pitch - gap, gap, energyY, energyH, trayTop, trayH, slotW, slotH, slotGap, trayLeft, trayCell };
+    const trayCell = Math.min(pitch * 0.93, (slotW * 0.95) / 3.1, ((slotH - ROTATE_OVERLAP) * 0.95) / 3);
+    this.layout = { W, H, bx, by, boardPx, frame, pad, pitch, cell: pitch - gap, gap, energyY, energyH, trayTop, trayH, slotW, slotH, slotGap, trayLeft, trayCell, trayW };
     this.boardBg = null;
+    this.bgCache = null;
   }
 
   cellXY(r: number, c: number) {
@@ -138,11 +148,18 @@ export class GameView {
   /** Centre of energy meter segment i (canvas coords). */
   segmentCenter(i: number, max: number) {
     const L = this.layout;
-    const segW = Math.min(44, L.boardPx * 0.11), segGap = 8;
-    const labelW = Math.min(150, L.boardPx * 0.4);
-    const total = labelW + max * segW + (max - 1) * segGap;
-    const x0 = L.W / 2 - total / 2 + labelW;
-    return { x: x0 + i * (segW + segGap) + segW / 2, y: L.energyY + L.energyH / 2, w: segW, h: Math.min(14, L.energyH * 0.34), labelX: L.W / 2 - total / 2 };
+    const x1 = L.W / 2 + 10, x2 = L.trayLeft + L.trayW - 4;
+    const segGap = 6;
+    const segW = Math.max(14, Math.min(34, ((x2 - x1) * 0.6 - (max - 1) * segGap) / max));
+    const x0 = x2 - (max * segW + (max - 1) * segGap);
+    return { x: x0 + i * (segW + segGap) + segW / 2, y: L.energyY + L.energyH / 2, w: segW, h: Math.min(12, L.energyH * 0.3), labelX: x1 };
+  }
+
+  /** Build 4: the Overdrive meter, left half of the energy row (also the tap target for activation). */
+  odRect() {
+    const L = this.layout;
+    const x = L.trayLeft + 4, w = L.W / 2 - 10 - x;
+    return { x, y: L.energyY + 2, w, h: L.energyH - 4 };
   }
 
   /** Which tray slot a point is in (generous: the whole column below the meter). */
@@ -223,14 +240,20 @@ export class GameView {
   get needsFrames() {
     const s = this.getState();
     const pulses = s.board.cells.some((c) => c?.pulse) || s.tray.some((p) => p && p.pulseIndex >= 0);
-    return this.animator.active || !!this.drag || !!this.returning || this.rotating.size > 0 || !!this.drain || (pulses && !this.reduced) || !!this.tutorialTarget || performance.now() < this.denied + 500;
+    const od = s.od && !this.reduced && (s.od.active > 0 || s.od.charge >= 100 || Math.abs(this.odShown - s.od.charge) > 0.5);
+    return this.animator.active || !!this.drag || !!this.returning || this.rotating.size > 0 || !!this.drain || (pulses && !this.reduced) || !!this.tutorialTarget
+      || performance.now() < this.denied + 500 || !!od || performance.now() < this.odPulse + 900;
   }
+
+  /** Build 4: rotation rules in force (Overdrive changes them); set by the app. */
+  effective: (s: GameState) => { rc: RotationConfig; energy: number } = (s) => ({ rc: this.rotation, energy: s.energy });
 
   playabilityOf(slot: number): Playability | null {
     const s = this.getState();
     const p = s.tray[slot];
     if (!p) return null;
-    return playability(this.rotation, s.board, p, s.energy);
+    const e = this.effective(s);
+    return playability(e.rc, s.board, p, e.energy);
   }
 
   private paintBoardBg() {
@@ -250,8 +273,7 @@ export class GameView {
   render(now: number) {
     const g = this.g, L = this.layout, state = this.getState(), A = this.animator;
     g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    g.fillStyle = THEME.bg;
-    g.fillRect(0, 0, L.W, L.H);
+    this.drawBackground(now, state);
 
     g.save();
     if (A.shake && !this.reduced) {
@@ -262,6 +284,7 @@ export class GameView {
 
     if (!this.boardBg) this.paintBoardBg();
     g.drawImage(this.boardBg!, 0, 0, this.boardBg!.width / this.dpr, this.boardBg!.height / this.dpr);
+    this.drawPerimeter(now, state);
     this.drawCelebration(now);
 
     const board = A.display ?? state.board;
@@ -305,10 +328,11 @@ export class GameView {
       let lift = 0, bright = 0, scale = 1;
       const st = A.settles.get(k);
       if (st !== undefined) {
-        const t = Math.min(1, (now - st) / 110);
-        lift = this.reduced ? 0 : (1 - t) * 0.9;
-        scale = this.reduced ? 1 : 1 + 0.05 * (1 - t);
-        bright = Math.max(0, 0.45 * (1 - (now - st) / 180));
+        // Snap, then a 100 ms compression and settle.
+        const t = Math.min(1, (now - st) / 100);
+        lift = this.reduced ? 0 : (1 - t) * (1 - t) * 0.8;
+        scale = this.reduced ? 1 : 1 - 0.045 * Math.sin(Math.PI * t);
+        bright = Math.max(0, 0.4 * (1 - (now - st) / 170));
       }
       if (A.glowCells && now >= A.glowCells.start && A.glowCells.cells.includes(k)) {
         const p = (now - A.glowCells.start) / A.glowCells.dur;
@@ -317,6 +341,13 @@ export class GameView {
       if (willClear.has(k)) bright = Math.max(bright, 0.22);
       if (d?.blast.has(k)) bright = Math.max(bright, 0.18);
       drawBlock(g, x, y, L.cell, cell.pulse, now, this.reduced, { lift, bright, scale, charge: charging.get(k) ?? (d?.firing.has(k) ? 0.6 : 0), material: this.matAt(Math.floor(k / 8), k % 8, now) });
+      // Contact highlight: the piece's edges catch the light as it locks in.
+      const ct = A.contact;
+      if (ct && now >= ct.start && ct.cells.includes(k)) {
+        const q = (now - ct.start) / ct.dur;
+        g.strokeStyle = rgba(cell.pulse ? THEME.pulseCore : currentMaterial().highlight, 0.85 * (1 - q)); g.lineWidth = 1.6;
+        roundRect(g, x + 0.8, y + 0.8, L.cell - 1.6, L.cell * 0.915 - 1.6, L.cell * 0.12); g.stroke();
+      }
       if (d?.blast.has(k)) {
         g.strokeStyle = rgba(THEME.pulse, 0.85); g.lineWidth = 1.5; g.setLineDash([3, 3]);
         roundRect(g, x + 2, y + 2, L.cell - 4, L.cell - 4, L.cell * 0.14); g.stroke(); g.setLineDash([]);
@@ -509,7 +540,7 @@ export class GameView {
       const life = (now - p.born) / p.life;
       const px = L.bx + L.pad + p.x * L.pitch, py = L.by + L.pad + p.y * L.pitch;
       g.globalAlpha = Math.max(0, 1 - life);
-      g.fillStyle = p.hue === 'cyan' ? THEME.pulse : p.hue === 'white' ? THEME.pulseCore : currentMaterial().highlight;
+      g.fillStyle = p.hue === 'cyan' ? THEME.pulse : p.hue === 'white' ? THEME.pulseCore : p.hue === 'gold' ? THEME.gold : currentMaterial().highlight;
       const s = p.size * L.pitch * (1 - life * 0.4);
       g.save(); g.translate(px, py); g.rotate(p.spin * life);
       g.fillRect(-s / 2, -s / 2, s, s);
@@ -517,17 +548,39 @@ export class GameView {
     }
     g.globalAlpha = 1;
 
+    // Perfect Board Clear: a gold ring with a cyan inner edge expanding from the centre of the board.
+    const pw = A.perfectWave;
+    if (pw && now >= pw.start) {
+      const p = Math.min(1, (now - pw.start) / pw.dur);
+      const cx = L.bx + L.boardPx / 2, cy = L.by + L.boardPx / 2;
+      const R = p * L.boardPx * 0.75;
+      g.save();
+      g.beginPath(); g.rect(L.bx, L.by, L.boardPx, L.boardPx); g.clip();
+      const rg = g.createRadialGradient(cx, cy, Math.max(0, R - L.pitch * 1.4), cx, cy, R + 1);
+      rg.addColorStop(0, rgba(THEME.pulse, 0)); rg.addColorStop(0.55, rgba(THEME.pulse, 0.35 * (1 - p)));
+      rg.addColorStop(0.85, rgba(THEME.gold, 0.6 * (1 - p))); rg.addColorStop(1, rgba(THEME.gold, 0));
+      g.fillStyle = rg; g.fillRect(L.bx, L.by, L.boardPx, L.boardPx);
+      g.restore();
+    }
+    const fl = A.flash;
+    if (fl && now >= fl.start && !this.reduced) {
+      const p = (now - fl.start) / fl.dur;
+      g.fillStyle = rgba(fl.color, fl.amount * (1 - p) * visualParams().wave);
+      roundRect(g, L.bx + L.frame, L.by + L.frame, L.boardPx - L.frame * 2, L.boardPx - L.frame * 2, L.pitch * 0.25); g.fill();
+    }
+
     // Points earned, near the cleared area.
     for (const f of A.floats) {
       if (now < f.start) continue;
       const p = (now - f.start) / f.dur;
       const px = L.bx + L.pad + (f.c + 0.5) * L.pitch, py = L.by + L.pad + (f.r + 0.5) * L.pitch - p * L.pitch * 0.9;
-      g.globalAlpha = p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3;
-      g.font = `800 ${Math.round(L.pitch * (f.big ? 0.62 : 0.5))}px ${FONT}`;
+      const fade = p < 0.7 ? 1 : 1 - (p - 0.7) / 0.3;
+      g.globalAlpha = f.minor ? fade * 0.75 : fade;
+      g.font = `800 ${Math.round(L.pitch * (f.big ? 0.62 : f.minor ? 0.36 : 0.5))}px ${FONT}`;
       g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.lineWidth = 4; g.strokeStyle = 'rgba(6,10,16,0.8)';
+      g.lineWidth = f.minor ? 3 : 4; g.strokeStyle = 'rgba(6,10,16,0.8)';
       g.strokeText(f.text, px, py);
-      g.fillStyle = f.big ? THEME.pulseCore : THEME.text; g.fillText(f.text, px, py);
+      g.fillStyle = f.gold ? '#FFE7B0' : f.big ? THEME.pulseCore : f.minor ? THEME.textDim : THEME.text; g.fillText(f.text, px, py);
       g.globalAlpha = 1;
     }
   }
@@ -539,16 +592,23 @@ export class GameView {
     const shown = Math.max(0, state.energy - this.animator.pendingEnergy);
     const s0 = this.segmentCenter(0, max);
     const denied = now < this.denied + 500 ? 1 - (now - this.denied) / 500 : 0;
-    g.font = `700 ${Math.round(Math.min(11, L.energyH * 0.27))}px ${FONT}`;
+    this.drawOverdrive(now, state);
+    const od = state.od;
+    const free = !!od && od.active > 0 && this.odRotation === 'free';
+    g.font = `700 ${Math.round(Math.min(10.5, L.energyH * 0.26))}px ${FONT}`;
     g.textAlign = 'right'; g.textBaseline = 'middle';
     // "ENERGY FULL" for a moment after restored energy fills the meter.
     const arr = this.animator.arrivals;
     const justFull = rc.mode === 'energy' && shown >= max && arr.length > 0 && now < arr[arr.length - 1].t + 1200;
     const goldFull = justFull && arr.some((a) => a.gold);
-    const label = rc.mode === 'unlimited' ? 'ROTATION  ∞' : shown === 0 ? 'NO ENERGY' : justFull ? 'ENERGY FULL' : 'ROTATION ENERGY';
-    g.fillStyle = denied > 0 ? THEME.invalid : justFull ? (goldFull ? THEME.gold : THEME.pulse) : shown === 0 && rc.mode === 'energy' ? rgba(THEME.textDim, 0.8) : THEME.textDim;
-    if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '1.5px';
-    g.fillText(label, s0.x - s0.w / 2 - 14 + (denied ? Math.sin(now * 0.08) * 3 * denied : 0), s0.y);
+    const label = rc.mode === 'unlimited' ? 'ROTATION ∞' : free ? 'FREE TURNS' : shown === 0 ? 'NO ENERGY' : justFull ? 'FULL' : 'ENERGY';
+    g.fillStyle = denied > 0 ? THEME.invalid : free ? THEME.gold : justFull ? (goldFull ? THEME.gold : THEME.pulse) : shown === 0 && rc.mode === 'energy' ? rgba(THEME.textDim, 0.8) : THEME.textDim;
+    if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0.8px';
+    // Narrow screens: a shorter label so it never runs into the Overdrive meter.
+    let text = label;
+    const right = s0.x - s0.w / 2 - 10;
+    if (right - g.measureText(text).width < s0.labelX) text = free ? 'FREE' : label === 'NO ENERGY' ? 'EMPTY' : label === 'ROTATION ∞' ? '∞' : label;
+    g.fillText(text, right + (denied ? Math.sin(now * 0.08) * 3 * denied : 0), s0.y);
     if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
     if (rc.mode === 'unlimited') return;
     for (let i = 0; i < max; i++) {
@@ -557,7 +617,7 @@ export class GameView {
       // recessed slot
       g.fillStyle = '#0A1119';
       roundRect(g, x - 2, y - 2, c.w + 4, c.h + 4, (c.h + 4) / 2); g.fill();
-      g.strokeStyle = i < shown ? rgba(THEME.pulse, 0.55) : '#3D5466'; g.lineWidth = 1.2;
+      g.strokeStyle = free ? rgba(THEME.gold, 0.8) : i < shown ? rgba(THEME.pulse, 0.55) : '#3D5466'; g.lineWidth = 1.2;
       roundRect(g, x - 1.5, y - 1.5, c.w + 3, c.h + 3, (c.h + 3) / 2); g.stroke();
       if (i >= shown) {
         // depleted: a dark inset groove, clearly different from a charged cell
@@ -597,6 +657,173 @@ export class GameView {
       }
     }
   }
+
+  /** Overdrive rotation benefit (set by the app from the config). */
+  odRotation: 'free' | 'limited' | 'reduced' | 'none' = 'free';
+  odDuration = 5;
+
+  /** Ambient background: a cool gradient behind the board; it warms gold while Overdrive is active. */
+  private drawBackground(now: number, state: GameState) {
+    const g = this.g, L = this.layout;
+    if (!this.bgCache) {
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(L.W * this.dpr); c.height = Math.ceil(L.H * this.dpr);
+      const b = c.getContext('2d')!;
+      b.scale(this.dpr, this.dpr);
+      b.fillStyle = THEME.bg; b.fillRect(0, 0, L.W, L.H);
+      const cx = L.W / 2, cy = L.by + L.boardPx * 0.45;
+      const rg = b.createRadialGradient(cx, cy, 0, cx, cy, Math.max(L.W, L.H) * 0.75);
+      rg.addColorStop(0, rgba('#1A2C3E', 0.9 * visualParams().boardLight)); rg.addColorStop(0.55, rgba('#101A26', 0.6)); rg.addColorStop(1, rgba(THEME.bg, 0));
+      b.fillStyle = rg; b.fillRect(0, 0, L.W, L.H);
+      this.bgCache = c;
+    }
+    g.drawImage(this.bgCache, 0, 0, L.W, L.H);
+    const od = state.od;
+    if (od && od.active > 0) {
+      // Very slow lighting drift while Overdrive is on (no rapid flashing).
+      const breathe = this.reduced ? 0.5 : 0.5 + 0.5 * Math.sin(now * 0.0018);
+      const cx = L.W / 2, cy = L.by + L.boardPx / 2;
+      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, L.boardPx * 0.95);
+      rg.addColorStop(0, rgba(THEME.gold, 0)); rg.addColorStop(0.6, rgba(THEME.gold, (0.05 + 0.04 * breathe) * visualParams().odLight)); rg.addColorStop(1, rgba(THEME.gold, 0));
+      g.fillStyle = rg; g.fillRect(0, 0, L.W, L.H);
+    }
+  }
+
+  /** The board perimeter reacts: cyan with a combo, champagne gold with Overdrive (ready: corners; active: traces). */
+  private drawPerimeter(now: number, state: GameState) {
+    const g = this.g, L = this.layout;
+    const od = state.od;
+    const active = !!od && od.active > 0;
+    const ready = !!od && !active && od.charge >= 100;
+    const combo = state.combo ?? 0;
+    const inset = L.frame * 0.45, rr = L.pitch * 0.3;
+    const x = L.bx + inset, y = L.by + inset, w = L.boardPx - inset * 2;
+    g.save();
+    if (combo >= 2 && !active) {
+      g.strokeStyle = rgba(THEME.pulse, Math.min(0.55, 0.12 + combo * 0.08)); g.lineWidth = Math.max(1.5, L.frame * 0.28);
+      g.shadowColor = THEME.pulse; g.shadowBlur = this.reduced ? 0 : 6 + combo * 2;
+      roundRect(g, x, y, w, w, rr); g.stroke();
+    }
+    if (active) {
+      const breathe = this.reduced ? 0.6 : 0.6 + 0.4 * Math.sin(now * 0.004);
+      const W = visualParams().odLight;
+      g.strokeStyle = rgba(THEME.gold, Math.min(1, 0.65 * breathe * W)); g.lineWidth = Math.max(2, L.frame * 0.36);
+      g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 12 * W;
+      roundRect(g, x, y, w, w, rr); g.stroke();
+      // Two light traces running round the frame.
+      if (!this.reduced) {
+        const per = w * 4;
+        const pt = (d: number) => d < w ? [x + d, y] : d < 2 * w ? [x + w, y + d - w] : d < 3 * w ? [x + 3 * w - d, y + w] : [x, y + 4 * w - d];
+        for (let i = 0; i < 2; i++) {
+          const [px, py] = pt(((now * 0.12) + i * per / 2) % per);
+          const rg = g.createRadialGradient(px, py, 0, px, py, L.pitch * 0.9);
+          rg.addColorStop(0, rgba('#FFF3D1', 0.9 * W)); rg.addColorStop(1, rgba(THEME.gold, 0));
+          g.fillStyle = rg; g.fillRect(px - L.pitch, py - L.pitch, L.pitch * 2, L.pitch * 2);
+        }
+      }
+    } else if (ready) {
+      const breathe = this.reduced ? 0.7 : 0.55 + 0.45 * Math.sin(now * 0.005);
+      g.strokeStyle = rgba(THEME.gold, 0.85 * breathe); g.lineWidth = Math.max(2, L.frame * 0.3); g.lineCap = 'round';
+      g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 10;
+      const seg = w * 0.12;
+      const line = (x1: number, y1: number, x2: number, y2: number) => { g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); };
+      line(x + rr, y, x + rr + seg, y); line(x + w - rr - seg, y, x + w - rr, y);
+      line(x + rr, y + w, x + rr + seg, y + w); line(x + w - rr - seg, y + w, x + w - rr, y + w);
+      line(x, y + rr, x, y + rr + seg); line(x, y + w - rr - seg, x, y + w - rr);
+      line(x + w, y + rr, x + w, y + rr + seg); line(x + w, y + w - rr - seg, x + w, y + w - rr);
+    }
+    g.restore();
+    // Overdrive activation: a bright gold front sweeping the whole perimeter once.
+    const ow = this.animator.odWave;
+    if (ow && now >= ow.start) {
+      const p = Math.min(1, (now - ow.start) / ow.dur);
+      g.save();
+      g.strokeStyle = rgba('#FFF3D1', 0.9 * (1 - p)); g.lineWidth = Math.max(2, L.frame * 0.5) * (1 + p);
+      g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 18;
+      const grow = p * L.pitch * 0.4;
+      roundRect(g, x - grow, y - grow, w + grow * 2, w + grow * 2, rr + grow); g.stroke();
+      g.restore();
+    }
+  }
+
+  /**
+   * Overdrive meter: fills magenta → violet → champagne gold. Ready: full gold with a sheen and READY. Active: the
+   * remaining Overdrive placements as gold segments. A held-off game over makes it pulse (OVERDRIVE AVAILABLE).
+   */
+  private drawOverdrive(now: number, state: GameState) {
+    const od = state.od;
+    if (!od || state.mode === 'tutorial') return;
+    const g = this.g, L = this.layout;
+    const R = this.odRect();
+    const target = od.active > 0 ? 0 : od.charge;
+    // The meter climbs smoothly to its new value.
+    this.odShown = this.reduced ? target : this.odShown + (target - this.odShown) * 0.18;
+    if (Math.abs(this.odShown - target) < 0.5 || target < this.odShown - 1) this.odShown = target;
+    const fs = Math.round(Math.min(10.5, L.energyH * 0.26));
+    g.font = `800 ${fs}px ${FONT}`;
+    g.textBaseline = 'middle'; g.textAlign = 'left';
+    if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0.8px';
+    const active = od.active > 0, ready = !active && od.charge >= 100;
+    const cy = R.y + R.h / 2;
+    const narrow = R.w < 150;
+    const label = active ? (narrow ? `×${this.odMult}` : `OVERDRIVE ×${this.odMult}`) : 'OVERDRIVE';
+    g.fillStyle = active || ready ? THEME.gold : THEME.textDim;
+    g.fillText(label, R.x, cy);
+    const lw = g.measureText(label).width + 8;
+    if ('letterSpacing' in g) (g as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = '0px';
+    const bx = R.x + lw, bw = Math.max(30, R.x + R.w - bx), bh = Math.min(12, L.energyH * 0.3), by = cy - bh / 2;
+    // recessed track
+    g.fillStyle = '#0A1119'; roundRect(g, bx - 2, by - 2, bw + 4, bh + 4, (bh + 4) / 2); g.fill();
+    g.strokeStyle = ready || active ? rgba(THEME.gold, 0.75) : '#3D5466'; g.lineWidth = 1.2;
+    roundRect(g, bx - 1.5, by - 1.5, bw + 3, bh + 3, (bh + 3) / 2); g.stroke();
+    if (active) {
+      const n = Math.max(1, this.odDuration), gap = 3, sw = (bw - gap * (n - 1)) / n;
+      for (let i = 0; i < n; i++) {
+        const lit = i < od.active;
+        const sx = bx + i * (sw + gap);
+        g.save();
+        if (lit) { g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 8; }
+        const grad = g.createLinearGradient(0, by, 0, by + bh);
+        grad.addColorStop(0, lit ? '#FFF3D1' : '#1A2430'); grad.addColorStop(1, lit ? '#C9A055' : '#121C26');
+        g.fillStyle = grad; roundRect(g, sx, by, sw, bh, bh / 2); g.fill();
+        g.restore();
+      }
+      return;
+    }
+    const f = Math.max(0, Math.min(1, this.odShown / 100));
+    if (f > 0) {
+      g.save();
+      roundRect(g, bx, by, Math.max(bh, bw * f), bh, bh / 2); g.clip();
+      const grad = g.createLinearGradient(bx, 0, bx + bw, 0);
+      if (ready) { grad.addColorStop(0, '#C9A055'); grad.addColorStop(0.5, '#FFF3D1'); grad.addColorStop(1, THEME.gold); }
+      else { grad.addColorStop(0, '#D936AD'); grad.addColorStop(0.6, '#8855E8'); grad.addColorStop(1, THEME.gold); }
+      g.fillStyle = grad; g.fillRect(bx, by, bw, bh);
+      g.fillStyle = 'rgba(255,255,255,0.4)'; g.fillRect(bx, by + 1, bw, Math.max(1, bh * 0.22));
+      if (ready && !this.reduced) {
+        const sx = bx + ((now * 0.12) % (bw + 40)) - 20;
+        const sh = g.createLinearGradient(sx - 20, 0, sx + 20, 0);
+        sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(0.5, 'rgba(255,255,255,0.65)'); sh.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = sh; g.fillRect(bx, by, bw, bh);
+      }
+      g.restore();
+    }
+    if (ready) {
+      g.font = `900 ${Math.max(8, bh - 2)}px ${FONT}`; g.textAlign = 'center';
+      g.fillStyle = '#2A1C00'; g.fillText('READY', bx + bw / 2, cy + 0.5);
+    }
+    // Gained-charge pulse, and the held-off game over (OVERDRIVE AVAILABLE) ring.
+    const pulse = now < this.odPulse + 700 ? 1 - (now - this.odPulse) / 700 : 0;
+    const avail = this.odAvailable ? 0.5 + 0.5 * Math.sin(now * 0.008) : 0;
+    const a = Math.max(pulse, avail);
+    if (a > 0 && !this.reduced) {
+      g.save();
+      g.strokeStyle = rgba(THEME.gold, a); g.lineWidth = 2; g.shadowColor = THEME.gold; g.shadowBlur = 10;
+      roundRect(g, bx - 4, by - 4, bw + 8, bh + 8, (bh + 8) / 2); g.stroke();
+      g.restore();
+    }
+  }
+
+  odMult = 2;
 
   private drawOrbs(now: number, state: GameState) {
     const g = this.g, L = this.layout;
@@ -658,7 +885,8 @@ export class GameView {
       }
       if (this.drag?.slot === i || this.returning?.slot === i) continue;
       const shape = shapeOf(p!);
-      const play = this.animator.busy ? 'now' : playability(this.rotation, state.board, p!, state.energy);
+      const eff = this.effective(state);
+      const play = this.animator.busy ? 'now' : playability(eff.rc, state.board, p!, eff.energy);
       const alpha = play === 'now' ? 1 : play === 'after-rotation' ? 0.62 : 0.3;
       let angle = 0;
       const rs = this.rotating.get(i);

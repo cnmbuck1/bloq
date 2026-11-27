@@ -9,6 +9,11 @@ export const KEYS = {
   settings: 'bloq.settings',
   tutorialDone: 'bloq.tutorialDone',
   analytics: 'bloq.analytics',
+  // Build 4
+  dailySave: 'bloq.daily.game',
+  dailyRun: 'bloq.daily.run',
+  dailyRecords: 'bloq.daily.records',
+  gcQueue: 'bloq.gc.pending',
 } as const;
 
 export function load(key: string): string | null {
