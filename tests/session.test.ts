@@ -49,7 +49,7 @@ describe('save and restore', () => {
     expect(restored!.state).toEqual(a);
     expect(restored!.elapsedMs).toBe(12345);
     expect(restored!.bestAtStart).toBe(900);
-    expect(restored!.version).toBe(1);
+    expect(restored!.version).toBe(2);
   });
 
   it('rejects corrupt, unknown-version and finished saves', () => {

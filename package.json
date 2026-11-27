@@ -1,18 +1,20 @@
 {
   "name": "bloq",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "description": "BLOQ - Place. Clear. React. A Cnmbuck Studios block puzzle.",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
+    "build:release": "BLOQ_RELEASE=1 npm run build",
     "build:preview": "vite build --mode preview && node tools/single-file.mjs",
     "preview": "vite preview --host",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "ios:sync": "npm run build && npx cap sync ios",
-    "ios:open": "npx cap open ios"
+    "ios:sync": "npm run build:release && npx cap sync ios",
+    "ios:open": "npx cap open ios",
+    "simulate": "SIM=1 vitest run tools/simulate.spec.ts"
   },
   "dependencies": {
     "@capacitor/core": "^8.6.0",

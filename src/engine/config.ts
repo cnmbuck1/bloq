@@ -38,12 +38,28 @@ export interface GenerationConfig {
   tiers: DifficultyTier[];
 }
 
+export type RotationMode = 'none' | 'unlimited' | 'energy';
+
+export interface RotationConfig {
+  /** 'energy' is the Build 2 default; 'none' and 'unlimited' exist for playtest comparison (dev menu only). */
+  mode: RotationMode;
+  startCharges: number;
+  maxCharges: number;
+  /** Energy per 90° turn that changes the piece (identical-looking turns are free). */
+  cost: number;
+  /** Energy restored per completed line. Pulse-only removals restore nothing. */
+  energyPerLine: number;
+  /** Rotation animation length (presentation only). */
+  animMs: number;
+}
+
 export interface GameConfig {
   boardSize: number;
   traySize: number;
   colors: number;
   scoring: ScoringConfig;
   generation: GenerationConfig;
+  rotation: RotationConfig;
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
@@ -72,5 +88,13 @@ export const DEFAULT_CONFIG: GameConfig = {
       { minScore: 5000, categoryWeights: { single: 0.7, line2: 0.8, line5: 1.25, square3: 1.3, bigL: 1.3, sz: 1.15 } },
       { minScore: 12000, categoryWeights: { single: 0.55, line2: 0.7, line5: 1.4, square3: 1.5, bigL: 1.45, sz: 1.25, t: 1.15 } },
     ],
+  },
+  rotation: {
+    mode: 'energy',
+    startCharges: 3,
+    maxCharges: 3,
+    cost: 1,
+    energyPerLine: 1,
+    animMs: 180,
   },
 };

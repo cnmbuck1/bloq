@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_CONFIG, type GameConfig } from '../src/engine/config';
 import { canPlace, emptyBoard, findCompletedLines, fitsAnywhere, isGameOver, lineCells, previewLines, type PieceInstance } from '../src/engine/board';
-import { applyMove, newGame, type GameState } from '../src/engine/game';
+import { applyMove, newGame, rotatePiece, type GameState } from '../src/engine/game';
 import { generateTray } from '../src/engine/generator';
 import { PIECES, pieceDef } from '../src/engine/pieces';
 import { resolvePulses } from '../src/engine/pulse';
@@ -250,6 +250,7 @@ describe('seeded generation', () => {
       let s = newGame(777);
       for (let i = 0; i < 30 && !s.over; i++) {
         const slot = s.tray.findIndex((p) => p && fitsAnywhere(s.board, pieceDef(p.defId)));
+        if (slot < 0) break;
         const def = pieceDef(s.tray[slot]!.defId);
         let done = false;
         for (let r = 0; r < 8 && !done; r++) for (let c = 0; c < 8 && !done; c++) {
@@ -351,7 +352,13 @@ describe('game over', () => {
 describe('tutorial script', () => {
   it('every step\'s target is legal and teaches what it says', () => {
     const results = TUTORIAL_STEPS.map((step) => {
-      const out = applyMove(tutorialState(step), step.target.slot, step.target.row, step.target.col);
+      let st = tutorialState(step);
+      for (let i = 0; i < (step.target.rot ?? 0); i++) {
+        const r = rotatePiece(st, step.target.slot);
+        if (!r.ok) throw new Error(`step "${step.title}" rotation refused: ${r.reason}`);
+        st = r.state;
+      }
+      const out = applyMove(st, step.target.slot, step.target.row, step.target.col);
       if (!out.ok) throw new Error(`step "${step.title}" target illegal`);
       return out.result;
     });
@@ -360,6 +367,12 @@ describe('tutorial script', () => {
     expect(results[2].rows.length + results[2].cols.length).toBe(2);
     expect(results[3].chain).toBe(1);
     expect(results[4].chain).toBe(2);
+    // Rotation step: one charge spent on the turn, one restored by the completed column.
+    expect(results[5].cols).toEqual([6]);
+    expect(results[5].energyAfter).toBe(1);
+    // Recharge step: two lines restore two charges from empty.
+    expect(results[6].rows).toEqual([6, 7]);
+    expect(results[6].energyGained).toBe(2);
   });
 });
 

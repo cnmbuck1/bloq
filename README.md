@@ -3,9 +3,12 @@
 **Place. Clear. React.** A Cnmbuck Studios block puzzle for iPhone (portrait), built as a TypeScript web app
 wrapped with Capacitor, the same stack as Gravitor.
 
-Build 1 is Classic Mode only: an 8×8 board, three pieces at a time, row and column clears, consecutive-move
-combos and the signature **Pulse Blocks**, which blast their eight neighbours when their line clears and set
-off any Pulse Block they hit.
+Classic Mode: an 8×8 board, three pieces at a time, row and column clears, consecutive-move combos and the
+signature **Pulse Blocks**, which blast their eight neighbours when their line clears and set off any Pulse
+Block they hit.
+
+Build 2 adds **Rotation Energy** (turn a tray piece 90° clockwise for one charge; every cleared line gives a
+charge back) and a new graphite, titanium and cyan look. See `docs/BUILD2_REPORT.md` for what changed.
 
 ## Run it
 
@@ -14,8 +17,10 @@ npm install
 npm run dev            # http://localhost:5173 (also on your LAN for a phone)
 npm test               # unit tests (Vitest)
 npm run typecheck
-npm run build          # production web build in dist/
-npm run build:preview  # one self-contained HTML file in preview/bloq.html
+npm run build          # development web build in dist/ (developer tools included)
+npm run build:release  # App Store web build: developer tools are compiled out
+npm run build:preview  # one self-contained HTML file in preview/bloq.html (developer tools included)
+npm run simulate       # balancing bot: 300 games per rotation mode, writes sim-results.json
 ```
 
 ### iPhone
@@ -24,7 +29,7 @@ Needs a Mac with Xcode.
 
 ```sh
 npx cap add ios        # first time only: creates ios/
-npm run ios:sync       # build + copy into the Xcode project
+npm run ios:sync       # release build + copy into the Xcode project
 npm run ios:open
 ```
 
@@ -34,13 +39,17 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-In Settings, tap the "BLOQ Build 1" label five times (or open the page with `?dev=1`). You get:
+Development builds only. In Settings, tap the "BLOQ Build 2" label five times (or open the page with `?dev=1`).
+`npm run build:release` removes all of this from the bundle. You get:
 
-- **Scenarios**: prepared boards that reproduce unusual situations (a 4-Pulse chain, row + column cross,
-  triple clear, Pulses on the edges, nearly game over, empty board). Defined in `src/dev/scenarios.ts`.
+- **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.
+- **Pulse chance**, **clear timing**, **particle intensity** and **haptic intensity**, live.
+- **Scenarios**: 16 prepared boards, trays and energy levels (rotation, chains, edges, energy restore, game
+  over). Defined in `src/dev/scenarios.ts`.
 - **Board editor**: tap cells to cycle empty, block, Pulse.
-- **Pulse chance** slider, live.
 - **Export analytics** as JSON, and reset all local data.
+
+Dev settings persist under `bloq.dev` in local storage.
 
 ## Architecture
 
@@ -54,7 +63,8 @@ pausing or skipping mid-animation can't corrupt the board.
 | Balancing config (all numbers) | `src/engine/config.ts` |
 | Piece definitions | `src/engine/pieces.ts` |
 | Seeded RNG | `src/engine/rng.ts` |
-| Board, placement validation, line detection, game over | `src/engine/board.ts` |
+| Board, placement validation, line detection | `src/engine/board.ts` |
+| Rotation, Rotation Energy, rotation-aware game over | `src/engine/rotation.ts` |
 | Pulse resolution | `src/engine/pulse.ts` |
 | Score calculation | `src/engine/scoring.ts` |
 | Piece generation | `src/engine/generator.ts` |
@@ -82,13 +92,14 @@ pausing or skipping mid-animation can't corrupt the board.
   `@capacitor/filesystem` (writes the share image to the cache for the share sheet), and `three`, which the
   canonical Orb file imports. Only the 2D `drawOrbIcon` is used, so three.js is tree-shaken out of the bundle.
 - Dev: TypeScript, Vite, Vitest, Capacitor CLI.
-- No game engine, UI framework, ad SDK or tracking SDK. No network requests. The JS bundle is about 65 KB.
+- No game engine, UI framework, ad SDK or tracking SDK. No network requests. The JS bundle is about 95 KB (32 KB gzipped).
 
 ### Branding
 
 `src/brand/cnmbuck-orb.ts` is copied byte for byte from `cnmbuck1/cnmbuckstudios-brand` and checked with
-`cd src/brand && sha256sum -c cnmbuck-orb.ts.sha256`. The wordmark uses the kit's `drawOrbWordmark` helper,
-so the O in BLOQ is the Orb. The splash shows the Orb and "CNMBUCK STUDIOS". There is no Orb in gameplay.
+`cd src/brand && sha256sum -c cnmbuck-orb.ts.sha256`. Build 2's wordmark uses an
+illuminated energy ring for the O, as the Build 2 spec asks. The Orb itself stays on the splash, the home
+screen footer, the share card and the app icon. There is no Orb in gameplay.
 
 ## Balancing parameters
 
@@ -106,12 +117,21 @@ All in `src/engine/config.ts`, passed to the engine as one object.
 - **Fairness**: when a tray is generated, if no chosen piece fits but some library piece does, one slot is
   swapped for a fitting piece (still weighted). Nothing promises all three stay playable.
 
+- **Rotation** (`rotation` in the config): mode `energy`, 3 starting charges, max 3, 1 charge per turn,
+  1 charge back per completed line (Pulse-only removals give nothing), 180 ms turn animation.
+- **Generation** is rotation-aware: the fairness check counts a piece as playable if it fits now or after
+  turns the player can afford. The generator never rotates pieces itself.
+
 ## Rules decisions worth knowing
 
 - A Pulse Block cleared by another Pulse's blast scores both its activation (50) and its block (10).
-- Game over is checked after all clears and chains, against every remaining piece at every position.
+- Game over is checked after all clears and chains, against every remaining piece at every position and
+  every orientation the current energy can pay for.
+- A turn that leaves the piece looking identical (shape and Pulse position) is free, so a 2×2 or 3×3 without
+  an off-centre Pulse never costs energy.
+- Rotation earns no points and doesn't break the combo.
 - An invalid drop returns the piece to the tray and doesn't touch the combo.
 - A drop snaps to the nearest legal grid position within ¾ of a cell; the preview always shows exactly
   where the piece will land.
-- Pieces that can't fit anywhere right now are dimmed in the tray. That's state, not strategy, so it isn't
-  a hint in the spec's sense, but it's easy to remove if you disagree.
+- Pieces that can't fit anywhere right now are dimmed in the tray. If one fits only after a turn, its rotate
+  button glows softly (the spec's subtle hint). The hint never says where to put it.

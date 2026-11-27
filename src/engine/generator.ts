@@ -6,7 +6,8 @@
 // - Uses only the seeded Rng, so a seed + game state reproduces the same tray.
 
 import type { GameConfig, DifficultyTier } from './config';
-import { fitsAnywhere, type Board, type PieceInstance } from './board';
+import type { Board, PieceInstance } from './board';
+import { playability } from './rotation';
 import { PIECES, type PieceDef } from './pieces';
 import type { Rng } from './rng';
 
@@ -16,6 +17,8 @@ export interface GenerateContext {
   recent: string[];
   /** Override for pulse chance (the tutorial uses 0; tests use 0 or 1). */
   pulseChance?: number;
+  /** Rotation energy the player will have when this tray appears (for the playability guarantee). */
+  energy?: number;
 }
 
 export function tierFor(cfg: GameConfig, score: number): DifficultyTier {
@@ -36,10 +39,10 @@ function weightsFor(cfg: GameConfig, pool: readonly PieceDef[], ctx: GenerateCon
   });
 }
 
-function instance(cfg: GameConfig, rng: Rng, p: PieceDef, pulseChance: number): PieceInstance {
-  const color = rng.int(cfg.colors);
+// Build 2: standard blocks share one material, so pieces no longer get a random colour.
+function instance(rng: Rng, p: PieceDef, pulseChance: number): PieceInstance {
   const pulseIndex = rng.next() < pulseChance ? rng.int(p.cells.length) : -1;
-  return { defId: p.id, color, pulseIndex };
+  return { defId: p.id, color: 0, pulseIndex, rot: 0 };
 }
 
 export function generateTray(cfg: GameConfig, board: Board, rng: Rng, ctx: GenerateContext, library: readonly PieceDef[] = PIECES): {
@@ -52,10 +55,13 @@ export function generateTray(cfg: GameConfig, board: Board, rng: Rng, ctx: Gener
     chosen.push(library[Math.max(0, rng.weighted(w))]);
   }
 
-  // Fairness guarantee: if nothing chosen fits but something in the library would, swap one slot
-  // for a fitting piece (still weighted, so it isn't always the single block).
-  if (!chosen.some((p) => fitsAnywhere(board, p))) {
-    const fitting = library.filter((p) => fitsAnywhere(board, p));
+  // Fairness guarantee: if nothing chosen is playable (as dealt, or after rotations the player can
+  // afford) but something in the library would be, swap one slot for a playable piece (still weighted).
+  // Pieces are always dealt unrotated; the generator never rotates for the player.
+  const energy = ctx.energy ?? cfg.rotation.startCharges;
+  const playable = (p: PieceDef) => playability(cfg.rotation, board, { defId: p.id, color: 0, pulseIndex: -1, rot: 0 }, energy) !== 'none';
+  if (!chosen.some(playable)) {
+    const fitting = library.filter(playable);
     if (fitting.length > 0) {
       const slot = rng.int(chosen.length);
       const others = chosen.filter((_, i) => i !== slot).map((p) => p.id);
@@ -64,7 +70,7 @@ export function generateTray(cfg: GameConfig, board: Board, rng: Rng, ctx: Gener
     }
   }
 
-  const tray = chosen.map((p) => instance(cfg, rng, p, pulseChance));
+  const tray = chosen.map((p) => instance(rng, p, pulseChance));
   const recent = [...ctx.recent, ...chosen.map((p) => p.id)].slice(-Math.max(cfg.generation.recentWindow, 1));
   return { tray, recent };
 }
