@@ -83,12 +83,14 @@ export class GameView {
     this.canvas.height = Math.round(H * this.dpr);
     setRenderScale(this.dpr);
 
-    const side = 12;
+    // Build 7: the board is the largest square that fits: up to 93% of the width (a 3.5% gutter each side), with the
+    // tray taking what remains below it, never less than it needs for comfortable dragging.
+    const side = Math.max(10, W * 0.035);
     // Build 4: the board keeps its Build 3 size; Overdrive and Rotation Energy share one compact row, and the tray
     // takes the space the old footer tagline used, so tray pieces grow 15–20%.
-    const energyH = Math.max(34, Math.min(46, H * 0.068));
-    const minTray = Math.max(124, H * 0.3);
-    const boardPx = Math.max(180, Math.min(W - side * 2, 600, H - energyH - minTray - 8, H * 0.6));
+    const energyH = Math.max(30, Math.min(40, H * 0.055));
+    const minTray = Math.max(118, Math.min(170, H * 0.235));
+    const boardPx = Math.max(180, Math.min(W - side * 2, 640, H - energyH - minTray - 6));
     const frame = Math.max(6, boardPx * 0.026);
     const pad = frame + Math.max(3, boardPx * 0.008);
     const pitch = (boardPx - pad * 2) / 8;

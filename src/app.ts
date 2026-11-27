@@ -274,9 +274,8 @@ export class App {
     $('tutorial').hidden = true;
     $('btnSkip').hidden = true;
     $('btnGameSettings').hidden = false;
-    $('scores').style.visibility = '';
-    $('status').style.visibility = '';
-    $('levelHud').style.visibility = '';
+    // Build 7: the practice round hides the HUD rows entirely (no reserved blank space); real games restore them.
+    $('game').classList.remove('tut-mode');
     this.session = new GameSession(state ?? this.freshClassic(), this.cfg);
     const daily = this.session.state.mode === 'daily';
     if (!daily) this.dailyRun = null;
@@ -1164,9 +1163,7 @@ export class App {
     this.tutorialIndex = -1;
     $('btnSkip').hidden = false;
     $('btnGameSettings').hidden = true;
-    $('scores').style.visibility = 'hidden';
-    $('status').style.visibility = 'hidden';
-    $('levelHud').style.visibility = 'hidden';
+    $('game').classList.add('tut-mode');
     setMaterial(this.cfg.materials[0]);
     this.displayedScore = 0;
     this.updateHud(true);
