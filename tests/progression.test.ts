@@ -216,9 +216,9 @@ describe('materials', () => {
 });
 
 describe('career and achievements', () => {
-  it('there are 32 achievements (19 from Build 3, 13 from Build 4) with unique ids', () => {
-    expect(ACHIEVEMENTS).toHaveLength(32);
-    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(32);
+  it('there are 34 achievements (19 from Build 3, 13 from Build 4, 2 from Build 10) with unique ids', () => {
+    expect(ACHIEVEMENTS).toHaveLength(34);
+    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(34);
   });
 
   it('lifetime points are never credited twice for the same move (restore, reopen, crash)', () => {
@@ -238,7 +238,7 @@ describe('career and achievements', () => {
     const o = move(s, 0, 0, 7);
     const st = recordMove(emptyStats(), o.result, { seed: 1, moves: 1 });
     const g = grantProgress(st, DEFAULT_CONFIG, 5);
-    expect(g.newAchievements.map((a) => a.id).sort()).toEqual(['double-impact', 'first-contact', 'pulse-initiate', 'triple-threat']);
+    expect(g.newAchievements.map((a) => a.id).sort()).toEqual(['double-impact', 'first-contact', 'pulse-initiate', 'triple-threat', 'two-rows']);
     expect(grantProgress(g.stats, DEFAULT_CONFIG, 6).newAchievements).toEqual([]);
   });
 

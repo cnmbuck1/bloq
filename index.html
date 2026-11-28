@@ -70,6 +70,7 @@
           <span class="label">CURRENT SCORE</span>
           <span class="score" id="score" aria-live="polite">0</span>
         </div>
+        <div class="affirm" id="affirm" role="status" aria-live="polite"></div>
         <div class="score-block best" id="bestWrap">
           <span class="label" id="bestLabel">PERSONAL BEST</span>
           <span class="best-value" id="best">0</span>
@@ -147,6 +148,8 @@
           <div><dt>Overdrive</dt><dd id="resOd" class="gold">0</dd></div>
           <div><dt>Perfect clears</dt><dd id="resPerfect">0</dd></div>
         </dl>
+        <div class="res-unlock" id="resUnlock" hidden><canvas class="ru-swatch" id="resUnlockSwatch" aria-hidden="true"></canvas><div><b id="resUnlockName"></b><span>Unlocked · choose it any time in Materials</span></div></div>
+        <button class="res-achv" id="resAch" hidden><span class="ra-ico" id="resAchIco" aria-hidden="true"></span><span class="ra-text"><span class="ra-k">NEW ACHIEVEMENT</span><b id="resAchName"></b><span id="resAchMore"></span></span></button>
         <p class="res-next" id="resNext"></p>
         <button class="btn btn-primary btn-xl" id="btnAgain" data-focus>PLAY AGAIN</button>
         <div class="row three">
@@ -362,7 +365,7 @@
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
         <button class="btn btn-primary" data-close>DONE</button>
-        <p class="version" id="version">BLOQ Build 9</p>
+        <p class="version" id="version">BLOQ Build 10</p>
       </div>
     </div>
 

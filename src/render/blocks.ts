@@ -277,7 +277,6 @@ export function gemRect(s: number) {
   return { x: s / 2 - w / 2, y: s / 2 - w / 2 + w * GEM_RISE, w };
 }
 
-const scratch = typeof document !== 'undefined' ? document.createElement('canvas') : null;
 /**
  * Build 8 glint: a narrow band of light travelling across the stone's facets from the upper left (the global light
  * direction), masked to the gem itself. p runs 0..1; strength scales the band (placement glints are a little brighter).
@@ -290,30 +289,59 @@ export function drawGlint(g: CanvasRenderingContext2D, x: number, y: number, s: 
   glintImage(g, im, x + r.x, y + r.y, r.w, p, strength);
 }
 
-/** A glint across any gem render drawn at (x, y) with width w (menus use it for stones outside the board). */
-export function glintImage(g: CanvasRenderingContext2D, im: CanvasImageSource, x: number, y: number, w: number, p: number, strength = 1) {
-  if (!scratch || p <= 0 || p >= 1) return;
-  const px = Math.ceil(w * dpr);
-  if (scratch.width < px) { scratch.width = px; scratch.height = px; }
-  const c = scratch.getContext('2d')!;
-  c.setTransform(1, 0, 0, 1, 0, 0);
-  c.globalCompositeOperation = 'source-over';
-  c.clearRect(0, 0, px, px);
+/**
+ * Build 10: glint frames are rendered once per gem image, size and step, then reused. Before, every glint redrew the
+ * gem and band through a shared scratch canvas each frame (24 times a frame while a triple clear builds up), which
+ * forces the GPU to flush that canvas between uses.
+ */
+const GLINT_STEPS = 32;
+const glintCache = new WeakMap<object, Map<number, (HTMLCanvasElement | undefined)[]>>();
+function glintFrame(im: CanvasImageSource, px: number, step: number): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  let bySize = glintCache.get(im as object);
+  if (!bySize) { bySize = new Map(); glintCache.set(im as object, bySize); }
+  let frames = bySize.get(px);
+  if (!frames) { if (bySize.size > 8) bySize.clear(); frames = []; bySize.set(px, frames); }
+  let f = frames[step];
+  if (f) return f;
+  f = document.createElement('canvas'); f.width = f.height = px;
+  const c = f.getContext('2d')!;
   c.drawImage(im, 0, 0, px, px);
   c.globalCompositeOperation = 'source-in';
-  const u = -0.35 + p * 1.7; // band centre along the diagonal
+  const u = -0.35 + ((step + 0.5) / GLINT_STEPS) * 1.7; // band centre along the diagonal
   const band = c.createLinearGradient(0, 0, px, px);
   const st = (v: number) => Math.max(0, Math.min(1, v));
   band.addColorStop(st(u - 0.16), 'rgba(255,255,255,0)');
-  band.addColorStop(st(u - 0.03), `rgba(255,255,255,${0.55 * strength})`);
-  band.addColorStop(st(u), `rgba(255,255,255,${0.85 * strength})`);
-  band.addColorStop(st(u + 0.03), `rgba(255,255,255,${0.55 * strength})`);
+  band.addColorStop(st(u - 0.03), 'rgba(255,255,255,0.55)');
+  band.addColorStop(st(u), 'rgba(255,255,255,0.85)');
+  band.addColorStop(st(u + 0.03), 'rgba(255,255,255,0.55)');
   band.addColorStop(st(u + 0.16), 'rgba(255,255,255,0)');
   c.fillStyle = band; c.fillRect(0, 0, px, px);
-  const prev = g.globalCompositeOperation;
+  frames[step] = f;
+  return f;
+}
+
+/** A glint across any gem render drawn at (x, y) with width w (menus use it for stones outside the board). */
+export function glintImage(g: CanvasRenderingContext2D, im: CanvasImageSource, x: number, y: number, w: number, p: number, strength = 1) {
+  if (p <= 0 || p >= 1 || strength <= 0) return;
+  const px = Math.ceil(w * dpr);
+  const f = glintFrame(im, px, Math.min(GLINT_STEPS - 1, Math.floor(p * GLINT_STEPS)));
+  if (!f) return;
+  const prevOp = g.globalCompositeOperation, prevA = g.globalAlpha;
   g.globalCompositeOperation = 'lighter';
-  g.drawImage(scratch, 0, 0, px, px, x, y, w, w);
-  g.globalCompositeOperation = prev;
+  g.globalAlpha = prevA * Math.min(1, strength);
+  g.drawImage(f, x, y, w, w);
+  g.globalCompositeOperation = prevOp; g.globalAlpha = prevA;
+}
+
+/** Prepares every glint frame for a gem at cell size s ahead of time (used before Overdrive and big clears). */
+export function warmGlints(s: number, mat: MaterialLook = current) {
+  if (blockStyle() !== 'b8') return;
+  const px = Math.ceil(gemRect(s).w * dpr);
+  for (const key of [gemFor(mat.id), 'pulse'] as const) {
+    const im = gemImage(key);
+    if (im) for (let i = 0; i < GLINT_STEPS; i++) glintFrame(im, px, i);
+  }
 }
 
 /** Draws a block at (x,y) with size s. */

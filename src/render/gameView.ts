@@ -9,7 +9,7 @@ import { playability, type Playability } from '../engine/rotation';
 import type { PlacementTarget } from '../game/session';
 import { Animator } from './animator';
 import { compartmentImage } from './gems';
-import { blockStyle, drawBlock, drawBlockShards, warmShards, drawGlint, isGemStyle, paintBoard8, paintPlatform8, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
+import { blockStyle, drawBlock, drawBlockShards, warmShards, warmGlints, drawGlint, isGemStyle, paintBoard8, paintPlatform8, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
 import { THEME, rgba } from './theme';
 
 export interface Layout {
@@ -141,6 +141,7 @@ export class GameView {
     jobs.push(() => this.glowSprite(THEME.gold, Math.max(2, L.frame * 0.4), this.reduced ? 0 : 18, pw, rr));
     jobs.push(() => this.glowSprite('#FFF3D1', Math.max(1.5, L.frame * 0.3), 0, pw, rr));
     jobs.push(() => warmShards(L.cell));
+    jobs.push(() => warmGlints(L.cell));
     jobs.push(() => this.glowSprite(THEME.pulse, Math.max(1.5, L.frame * 0.28), this.reduced ? 0 : 10, pw, rr));
     jobs.push(() => this.glowSprite(isGemStyle() ? THEME.pulse : '#E070D8', Math.max(1.5, L.frame * 0.3), this.reduced ? 0 : 14, pw, rr));
     for (const sz of sizes) for (const pulse of [false, true]) jobs.push(() => drawBlock(scratch, 0, 0, sz, pulse, 0, this.reduced, { od: true }));

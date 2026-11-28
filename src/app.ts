@@ -12,7 +12,7 @@ import { SCENARIOS } from './dev/scenarios';
 import { boardFromArt } from './game/boardArt';
 import { GameSession } from './game/session';
 import {
-  ACHIEVEMENTS, achievementProgress, activeMaterial, grantProgress, nextMilestone, type AchievementDef, type AchievementIcon,
+  ACHIEVEMENTS, achievementProgress, achievementWeight, achievementsInOrder, activeMaterial, grantProgress, nextMaterial, nextMilestone, type AchievementDef, type AchievementIcon,
 } from './game/achievements';
 import { loadSettings, saveSettings, type Settings } from './game/settings';
 import {
@@ -179,6 +179,7 @@ export class App {
     track('game_launched');
     track('session_started', { games: this.stats.gamesPlayed, days: this.stats.days.length, firstDay: this.stats.days[0] ?? '' });
     this.checkSave();
+    this.creditEarlier();
     this.flushGameCenter();
     this.startSplash();
   }
@@ -270,6 +271,17 @@ export class App {
     $('btnDaily').classList.toggle('done', !!day?.completed);
     this.applyMaterial(s.highestLevel);
     this.flushGameCenter();
+  }
+
+  /**
+   * Build 10: credits achievements the saved career already proves (Daily completions from the Daily records, levels,
+   * Overdrive use), once, quietly at launch. Unlocks are stored with their time, so nothing is ever granted twice.
+   */
+  private creditEarlier() {
+    const sk = streaks(this.daily, this.today());
+    const synced = syncDaily(this.stats, { completed: sk.completed, current: sk.current, longest: sk.longest, best: sk.best });
+    const g = grantProgress(synced, this.cfg);
+    if (g.stats !== this.stats) { this.stats = g.stats; store(KEYS.stats, JSON.stringify(this.stats)); }
   }
 
   /** Build 1 saves migrate; anything that can't be restored is cleared with an explanation. Records are kept. */
@@ -640,6 +652,7 @@ export class App {
         this.displayedScore = tutorial ? 0 : r.scoreAfter;
         this.updateHud();
         this.setCombo(r.combo, true);
+        if (!tutorial) this.affirm(r.rows.length);
         this.celebrate(r, 'lines');
       },
       onWave: (i, wave, r) => {
@@ -725,9 +738,12 @@ export class App {
     const add = (t: string, k = '') => out.push({ t, k });
     const mult = this.rules().scoring.comboMultipliers;
     if (phase === 'lines' && r.chain === 0) {
-      if (lines >= 4) add(lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big');
-      else if (lines === 3) add('TRIPLE CLEAR', 'big');
-      else if (lines === 2) add('DOUBLE CLEAR');
+      // Build 10: two or more rows get their affirmation by the score instead (Great! / Excellent! / Amazing!).
+      if (tutorial || r.rows.length < 2) {
+        if (lines >= 4) add(lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big');
+        else if (lines === 3) add('TRIPLE CLEAR', 'big');
+        else if (lines === 2) add('DOUBLE CLEAR');
+      }
       // Top multiplier reached (and every move it holds there): 3.0× with the default table.
       if (r.combo === mult.length) add('MASSIVE COMBO ×' + Math.max(...mult).toFixed(1), 'big');
       else if (lines < 2 && r.combo >= 3) add('GREAT MOVE');
@@ -965,9 +981,7 @@ export class App {
       levelRecord && ['NEW LEVEL RECORD', ''],
       (st.stats.maxChain >= 4 || this.earned.chainRecord) && ['MASSIVE CHAIN REACTION', ''],
       st.stats.perfectClears > 0 && [st.stats.perfectClears > 1 ? `PERFECT CLEAR ×${st.stats.perfectClears}` : 'PERFECT CLEAR', ''],
-      this.earned.materials.length > 0 && [`${this.earned.materials[this.earned.materials.length - 1].name.toUpperCase()} UNLOCKED`, 'mat'],
       (st.stats.odActivations >= 2 || st.stats.odBestScore >= 5000) && ['OVERDRIVE MASTER', ''],
-      this.earned.achievements.length > 0 && [`NEW ACHIEVEMENT · ${this.earned.achievements[0].name.toUpperCase()}`, ''],
     ];
     const top = (candidates.filter(Boolean) as [string, string][]).find(([t]) => t !== kicker) ?? null;
     $('resAcc').innerHTML = top ? `<li class="${[top[1], 'top'].join(' ').trim()}">${top[0]}</li>` : '';
@@ -977,9 +991,25 @@ export class App {
     $('resLevel').innerHTML = `LEVEL <b>${level}</b> — <b>${title.toUpperCase()}</b>${legacy ? ' · BUILD 3 RULES' : ''}`;
     $('resLvl').textContent = String(level);
     $('resLvlBest').textContent = String(this.stats.highestLevel);
+    // Build 10: a material unlocked this run is celebrated here; otherwise the next one to aim for.
+    const unlocked = this.earned.materials[this.earned.materials.length - 1];
+    $('resUnlock').hidden = !unlocked;
+    if (unlocked) {
+      $('resUnlockName').textContent = `${unlocked.name.toUpperCase()}${this.earned.materials.length > 1 ? ` +${this.earned.materials.length - 1} MORE` : ''}`;
+      requestAnimationFrame(() => paintMaterialSwatch($<HTMLCanvasElement>('resUnlockSwatch'), unlocked, false));
+    }
+    // Newly earned achievements: the most meaningful leads; the rest wait in Achievements.
+    const achs = [...this.earned.achievements].sort((a, b) => achievementWeight(b) - achievementWeight(a));
+    $('resAch').hidden = !achs.length;
+    if (achs.length) {
+      $('resAchIco').innerHTML = ACH_ICONS[achs[0].icon];
+      $('resAchName').textContent = achs[0].name;
+      $('resAchMore').textContent = achs.length > 1 ? `+${achs.length - 1} more in Achievements` : achs[0].description;
+    }
+    const nm = nextMaterial(this.stats, this.cfg);
     const dailyDone = !!this.daily.days[this.today()]?.completed;
-    const next = !dailyDone ? "Complete today's Daily Challenge" : nextMilestone(this.stats, this.cfg) ?? `Beat your personal best of ${fmt(this.stats.bestScore)}`;
-    $('resNext').innerHTML = `Next: <b>${next}</b>`;
+    $('resNext').innerHTML = nm ? `Next unlock · <b>${nm.name} at Level ${nm.minLevel}</b>`
+      : `Next: <b>${!dailyDone ? 'Complete the current Daily Challenge' : nextMilestone(this.stats, this.cfg) ?? `Beat your personal best of ${fmt(this.stats.bestScore)}`}</b>`;
     const mat = activeMaterial(this.cfg, this.stats, level);
     const message = this.earned.chainRecord && st.stats.maxChain >= 3 ? 'Can you trigger a bigger chain reaction?'
       : level >= 3 && (levelRecord || level >= 6) ? `I reached Level ${level} in BLOQ.`
@@ -1309,6 +1339,23 @@ export class App {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
   }
 
+  /**
+   * Build 10: one short affirmation by the score for rows cleared by a single placement (columns keep their own
+   * feedback). Fixed in place, it never moves the HUD; a new qualifying clear replaces one still showing.
+   */
+  private affirm(rows: number) {
+    if (rows < 2) return;
+    const el = $('affirm');
+    const [text, kind] = rows >= 4 ? ['Amazing!', 'amazing'] : rows === 3 ? ['Excellent!', 'excellent'] : ['Great!', 'great'];
+    el.textContent = text;
+    el.className = 'affirm';
+    void el.offsetWidth;
+    el.className = `affirm on ${kind}`;
+    clearTimeout(this.affirmTimer);
+    this.affirmTimer = window.setTimeout(() => { el.className = 'affirm'; }, 1300);
+  }
+  private affirmTimer = 0;
+
   /** Restarts a short CSS highlight on an element (class removed and re-added). */
   private flash(id: string, cls: string) {
     const el = $(id);
@@ -1532,11 +1579,11 @@ export class App {
   private renderAchievements() {
     const s = this.stats;
     let done = 0;
-    $('achList').innerHTML = ACHIEVEMENTS.map((a) => {
+    $('achList').innerHTML = achievementsInOrder().map((a) => {
       const p = achievementProgress(a, s, this.cfg);
       if (p.done) done++;
       const pct = p.done ? 100 : Math.round((p.value / p.target) * 100);
-      const status = p.done ? 'DONE' : a.target > 1 ? `${a.target >= 10000 ? fmt(p.value) : p.value} / ${fmt(a.target)}` : '';
+      const status = p.done ? 'DONE' : a.target > 1 ? `${a.target >= 10000 ? fmt(p.value) : p.value} / ${fmt(a.target)}${a.unit ? ` <small>${a.unit}</small>` : ''}` : '';
       return `<li class="ach${p.done ? ' done' : ''}"><span class="ico">${ACH_ICONS[a.icon]}</span>`
         + `<div><div class="nm">${a.name}</div><div class="ds">${a.description}</div>${p.done ? '' : `<div class="pg"><i style="width:${pct}%"></i></div>`}</div>`
         + `<span class="st">${status}</span></li>`;
@@ -1955,6 +2002,7 @@ export class App {
     on('btnSkip', () => { this.view.animator.finish(); this.tutorialIndex = -2; this.finishTutorial(true); });
     on('btnAgain', () => { this.closeOverlay(); track('game_restarted'); this.startClassic(); });
     on('btnResHome', () => { this.closeOverlay(); this.show('home'); });
+    on('resAch', () => { this.overlayReturn = 'results'; this.renderStats(); this.statsTab('ach'); this.openOverlay('stats'); });
     on('btnShare', () => this.share());
     on('btnTutorial', () => {
       this.closeOverlay();

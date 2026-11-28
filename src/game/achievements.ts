@@ -15,6 +15,8 @@ export interface AchievementDef {
   description: string;
   icon: AchievementIcon;
   target: number;
+  /** Build 10: what the progress counts, e.g. "Daily Challenges" (shown as 2 / 3 Daily Challenges). */
+  unit?: string;
   /** The career figure this achievement measures. */
   value: (s: LifetimeStats, cfg: GameConfig) => number;
 }
@@ -30,6 +32,8 @@ const A = (id: string, name: string, description: string, icon: AchievementIcon,
   ({ id, name, description, icon, target, value });
 
 export const ACHIEVEMENTS: readonly AchievementDef[] = [
+  // Build 10 starter set: listed first, the first goals a new player meets.
+  A('two-rows', 'Row Breaker', 'Clear two rows in one placement', 'clear', 2, (s) => s.maxRowsAtOnce ?? 0),
   A('first-contact', 'First Contact', 'Complete your first line', 'line', 1, (s) => s.totalLines),
   A('energy-operator', 'Energy Operator', 'Perform your first rotation', 'rotate', 1, (s) => s.totalRotations),
   A('pulse-initiate', 'Pulse Initiate', 'Activate your first Pulse Block', 'pulse', 1, (s) => s.totalPulses),
@@ -42,6 +46,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   A('maximum-output', 'Maximum Output', 'Reach a 3.0× combo', 'combo', 1, (s, cfg) => (s.maxCombo >= comboForMaxMultiplier(cfg) ? 1 : 0)),
   A('technician', 'Technician', 'Reach Level 3', 'level', 3, (s) => s.highestLevel),
   A('strategist', 'Strategist', 'Reach Level 5', 'level', 5, (s) => s.highestLevel),
+  A('solar-ascent', 'Solar Ascent', 'Reach Level 7 in Classic', 'level', 7, (s) => s.highestLevel),
   A('mastermind', 'Mastermind', 'Reach Level 8', 'level', 8, (s) => s.highestLevel),
   A('quantum-master', 'Quantum Master', 'Reach Level 10', 'level', 10, (s) => s.highestLevel),
   A('quantum-evolution', 'Quantum Evolution', 'Reach Level 11', 'level', 11, (s) => s.highestLevel),
@@ -50,15 +55,15 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   A('million-point-club', 'Million Point Club', 'Earn 1,000,000 lifetime points', 'points', 1_000_000, (s) => s.lifetimePoints),
   A('material-collector', 'Material Collector', 'Unlock all six materials', 'material', 6, (s) => s.unlockedMaterials.length),
   // Build 4
-  A('overdrive-initiate', 'Overdrive Initiate', 'Activate Overdrive', 'overdrive', 1, (s) => s.odActivations),
+  A('overdrive-initiate', 'Overdrive Initiate', 'Activate Overdrive for the first time', 'overdrive', 1, (s) => s.odActivations),
   A('energy-master', 'Energy Master', 'Activate Overdrive 25 times', 'overdrive', 25, (s) => s.odActivations),
   A('maximum-reaction', 'Maximum Reaction', 'Trigger a three-Pulse chain during Overdrive', 'chain', 3, (s) => s.odMaxChain),
   A('critical-overdrive', 'Critical Overdrive', 'Trigger a five-Pulse chain during Overdrive', 'chain', 5, (s) => s.odMaxChain),
   A('precision-master', 'Precision Master', 'Clear the whole board', 'perfect', 1, (s) => s.perfectClears),
   A('perfectionist', 'Perfectionist', 'Clear the whole board 10 times', 'perfect', 10, (s) => s.perfectClears),
   A('combo-guardian', 'Combo Guardian', 'Keep a combo alive with Combo Protection', 'shield', 1, (s) => s.comboProtected),
-  A('daily-initiate', 'Daily Initiate', 'Complete a Daily Challenge', 'daily', 1, (s) => s.dailyCompleted),
-  A('daily-explorer', 'Daily Explorer', 'Complete 3 Daily Challenges', 'daily', 3, (s) => s.dailyCompleted),
+  A('daily-initiate', 'Daily Initiate', 'Complete your first Daily Challenge', 'daily', 1, (s) => s.dailyCompleted),
+  { ...A('daily-explorer', 'Daily Explorer', 'Complete three different Daily Challenges (replays count once)', 'daily', 3, (s) => s.dailyCompleted), unit: 'Daily Challenges' },
   A('daily-specialist', 'Daily Specialist', 'Complete 7 Daily Challenges', 'daily', 7, (s) => s.dailyCompleted),
   A('daily-veteran', 'Daily Veteran', 'Complete 30 Daily Challenges', 'daily', 30, (s) => s.dailyCompleted),
   A('weekly-streak', 'Weekly Streak', 'Complete the Daily Challenge 7 days in a row', 'streak', 7, (s) => s.longestStreak),
@@ -118,4 +123,30 @@ export function nextMilestone(s: LifetimeStats, cfg: GameConfig): string | null 
     return `${a.description} to earn ${a.name}`;
   }
   return null;
+}
+
+/** Build 10: the starter set, shown first on the Achievements screen. */
+export const STARTER_ACHIEVEMENTS = ['two-rows', 'overdrive-initiate', 'solar-ascent', 'daily-initiate', 'daily-explorer'] as const;
+
+/** Achievements in display order: the starter set first, then the rest as defined. */
+export function achievementsInOrder(): AchievementDef[] {
+  const first = STARTER_ACHIEVEMENTS.map((id) => ACHIEVEMENTS.find((a) => a.id === id)!).filter(Boolean);
+  return [...first, ...ACHIEVEMENTS.filter((a) => !first.includes(a))];
+}
+
+/**
+ * Build 10: how meaningful an unlock is, to lead the results screen when several unlock in one run. Harder and
+ * rarer goals rank higher; first-time basics rank lowest.
+ */
+export function achievementWeight(a: AchievementDef): number {
+  const per: Record<AchievementIcon, number> = {
+    line: 1, rotate: 1, pulse: 2, chain: 12, clear: 8, combo: 25, level: 10, games: 0.6, points: 0.00006, material: 12,
+    overdrive: 6, perfect: 30, shield: 8, daily: 7, streak: 9,
+  };
+  return per[a.icon] * a.target;
+}
+
+/** The next locked material and the level that unlocks it (null when all are unlocked). */
+export function nextMaterial(s: LifetimeStats, cfg: GameConfig): MaterialDef | null {
+  return cfg.materials.find((m) => !s.unlockedMaterials.includes(m.id)) ?? null;
 }

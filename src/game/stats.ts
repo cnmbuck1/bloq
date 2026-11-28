@@ -13,6 +13,8 @@ export interface LifetimeStats {
   totalScore: number;
   totalLines: number;
   maxLinesAtOnce: number;
+  /** Build 10: most rows (not columns) cleared by one placement. Starts at 0 for older careers (not recorded before). */
+  maxRowsAtOnce: number;
   maxCombo: number;
   totalPulses: number;
   maxChain: number;
@@ -72,7 +74,7 @@ const isCurrentClassic = (c: RecordContext) => c.mode !== 'daily' && c.ruleset >
 const isLegacyClassic = (c: RecordContext) => c.mode !== 'daily' && c.ruleset < 2;
 
 export const emptyStats = (): LifetimeStats => ({
-  version: 1, bestScore: 0, gamesPlayed: 0, totalScore: 0, totalLines: 0, maxLinesAtOnce: 0,
+  version: 1, bestScore: 0, gamesPlayed: 0, totalScore: 0, totalLines: 0, maxLinesAtOnce: 0, maxRowsAtOnce: 0,
   maxCombo: 0, totalPulses: 0, maxChain: 0, totalPlayMs: 0, days: [],
   totalRotations: 0, energyEarned: 0, energySpent: 0, maxGamesInSession: 0,
   highestLevel: 1, lifetimePoints: 0, unlockedMaterials: ['magenta'], achievements: {}, materialMode: 'progressive',
@@ -108,6 +110,7 @@ export function recordMove(s: LifetimeStats, r: MoveResult, credit?: { seed: num
     odMaxChain: Math.max(s.odMaxChain, r.odActive ? r.chain : 0, g?.odMaxChain ?? 0),
     totalLines: s.totalLines + lines,
     maxLinesAtOnce: Math.max(s.maxLinesAtOnce, lines),
+    maxRowsAtOnce: Math.max(s.maxRowsAtOnce ?? 0, r.rows.length),
     maxCombo: Math.max(s.maxCombo, r.combo),
     totalPulses: s.totalPulses + r.chain,
     maxChain: Math.max(s.maxChain, r.chain),
