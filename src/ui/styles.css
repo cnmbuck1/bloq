@@ -656,3 +656,15 @@ button { font: inherit; color: inherit; }
 .cn-text { margin: 0 0 6px; text-align: center; color: var(--dim); font-size: 14px; line-height: 1.45; }
 .cn-text b { color: var(--text); font-variant-numeric: tabular-nums; }
 .btn-danger { color: #FFB4B4; }
+
+/* ================= Build 10 ================= */
+/* Daily week strip: the local date sits inside each box, under its weekday label; completed days show date and check. */
+.wk-dot { width: 100%; max-width: 40px; height: 42px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; font-size: 15px; }
+.wk-num { font-size: 15px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.wk-check { font-style: normal; font-size: 11px; font-weight: 900; line-height: 1; }
+.wk.future .wk-dot, .wk.before .wk-dot { color: #8DA3B3; }
+.wk.missed .wk-dot { color: #6C8292; }
+.wk.today .wk-dot { color: var(--text); background: rgba(89,221,235,0.08); }
+.wk.completed .wk-dot { color: #3A2804; }
+.wk.completed.is-today .wk-dot { box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 0 0 2px var(--bg), 0 0 0 4px var(--cyan); }
+@media (max-height: 700px) { .wk-dot { height: 36px; } .wk-num { font-size: 14px; } }

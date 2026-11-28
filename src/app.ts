@@ -20,7 +20,7 @@ import {
   recordSessionGames, syncDaily, type LifetimeStats, type RecordContext,
 } from './game/stats';
 import {
-  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, weekStrip, bestDays, type DailyRecords,
+  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, weekStrip, bestDays, labelShift, recordsByLabel, localDateId, type DailyRecords,
 } from './game/dailyRecords';
 import {
   LEADERBOARDS, flushQueue, gameCenterSupported, loadBoard, openDashboard, pruneExpired, queueSubmission, type LeaderboardKey, type PendingSubmission,
@@ -262,11 +262,11 @@ export class App {
     const sk = streaks(this.daily, id);
     const saved = this.dailySave();
     const bestDaily = Math.max(sk.best, this.stats.bestDaily);
-    $('homeDaily').innerHTML = day?.completed ? `Completed today · Best <b>${fmt(day.best)}</b>`
+    $('homeDaily').innerHTML = day?.completed ? `Completed · Best <b>${fmt(day.best)}</b>`
       : saved ? `In progress · <b>${saved.state.stats.moves} of ${saved.state.daily?.limit ?? 30}</b> placements`
       : bestDaily > 0 ? `Ready to play · Best <b>${fmt(bestDaily)}</b>` : 'Ready to play';
     const streakText = sk.current > 0 ? `Streak <b>${sk.current} day${sk.current === 1 ? '' : 's'}</b>` : sk.longest > 0 ? `Longest streak <b>${sk.longest}</b>` : 'Start a streak today';
-    $('homeStreak').innerHTML = day?.completed ? `${streakText} · Next in ${fmtCountdown(this.msToNext())}` : streakText;
+    $('homeStreak').innerHTML = day?.completed ? `${streakText} · Next at ${this.resetClock()}` : streakText;
     $('btnDaily').classList.toggle('done', !!day?.completed);
     this.applyMaterial(s.highestLevel);
     this.flushGameCenter();
@@ -339,6 +339,17 @@ export class App {
     return this.devEnabled ? { ...st, dev: true } : st;
   }
 
+  /** Build 10: day shift from a shared challenge id to the local date it is shown as (see labelShift). */
+  private dayShift(): number { return labelShift(new Date().getTimezoneOffset()); }
+  /** The local date a challenge is shown as. */
+  private labelOf(id: string): string { return addDays(id, this.dayShift()); }
+  /** The challenge's local date in words. */
+  private dailyDate(id: string, year = true): string { return dayLabel(this.labelOf(id), year); }
+  /** True while the current challenge is labelled with today's local date ("today" reads naturally). */
+  private dailyIsLocalToday(): boolean { return this.labelOf(this.today()) === localDateId(); }
+  /** The shared reset as a local clock time, e.g. "7:00 PM". */
+  private resetClock(): string { return new Date(Date.now() + this.msToNext()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+
   /** Today's challenge id (UTC). The developer menu can simulate another day. */
   private today(): string {
     return (!__RELEASE__ && /^\d{4}-\d{2}-\d{2}$/.test(this.dev.dailyDate)) ? this.dev.dailyDate : challengeId();
@@ -367,7 +378,9 @@ export class App {
   private openDailyHub() {
     const id = this.today();
     const [y, m] = id.split('-').map(Number);
-    if (!this.calMonth.y) this.calMonth = { y, m };
+    const [ly, lm] = this.labelOf(id).split('-').map(Number);
+    if (!this.calMonth.y) this.calMonth = { y: ly, m: lm };
+    void y; void m;
     this.renderDailyHub();
     this.openOverlay('dailyHub');
     this.wake();
@@ -388,9 +401,10 @@ export class App {
     const st = streaks(this.daily, id);
     const saved = this.dailySave();
     const limit = this.dev.dailyLimit || this.cfg.daily.placementLimit;
-    $('dhDate').textContent = dayLabel(id);
+    const localToday = this.dailyIsLocalToday();
+    $('dhDate').textContent = localToday ? this.dailyDate(id) : `Current challenge · ${this.dailyDate(id)}`;
     $('dhLead').innerHTML = saved ? `Challenge in progress · <b>${saved.state.stats.moves} of ${saved.state.daily?.limit ?? limit}</b> moves`
-      : day?.completed ? `Completed · today&rsquo;s best <b>${fmt(day.best)}</b>` : 'Today&rsquo;s puzzle awaits';
+      : day?.completed ? `Completed · best <b>${fmt(day.best)}</b>` : localToday ? 'Today&rsquo;s puzzle awaits' : 'Current challenge awaits';
     $('dhRules').textContent = `${limit} moves · Same puzzle for everyone · No timer`;
     $('btnDailyStart').textContent = saved ? 'CONTINUE CHALLENGE' : day?.completed ? 'PLAY AGAIN' : 'START CHALLENGE';
     const best = Math.max(st.best, this.stats.bestDaily);
@@ -398,18 +412,19 @@ export class App {
     $('dhStats').innerHTML = stat(`${st.current}`, st.current === 1 ? 'day streak' : 'day streak', 'streak')
       + stat(`${st.completed}`, 'completed') + stat(best ? fmt(best) : '–', 'best daily');
     const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-    const sym = { completed: '✓', today: '', missed: '–', future: '', before: '' } as const;
-    const word = { completed: 'completed', today: 'today, not played yet', missed: 'missed', future: 'upcoming', before: 'before your first challenge' } as const;
-    $('dhWeek').innerHTML = weekStrip(this.daily, id).map((d) =>
-      `<div class="wk ${d.state}${d.isToday ? ' is-today' : ''}" role="listitem" aria-label="${dayLabel(d.id, false)}, ${d.isToday && d.state === 'completed' ? 'today, completed' : word[d.state]}">`
-      + `<span class="wk-dow">${DOW[d.dow]}</span><span class="wk-dot">${d.isToday && d.state !== 'completed' ? '<i></i>' : sym[d.state]}</span></div>`).join('');
-    $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
+    // Build 10: each box shows its local date; a completed day shows the date and a check; the current challenge
+    // keeps its own outline. Boxes are local dates, each standing for the shared challenge that starts on it.
+    const word = { completed: 'completed', today: 'current challenge, not played yet', missed: 'missed', future: 'upcoming', before: 'before your first challenge' } as const;
+    $('dhWeek').innerHTML = weekStrip(recordsByLabel(this.daily, this.dayShift()), this.labelOf(id)).map((d) =>
+      `<div class="wk ${d.state}${d.isToday ? ' is-today' : ''}" role="listitem" aria-label="${dayLabel(d.id, false)}, ${d.isToday && d.state === 'completed' ? 'current challenge, completed' : word[d.state]}">`
+      + `<span class="wk-dow">${DOW[d.dow]}</span><span class="wk-dot"><b class="wk-num">${d.day}</b>${d.state === 'completed' ? '<i class="wk-check" aria-hidden="true">✓</i>' : ''}</span></div>`).join('');
+    $('dhNext').innerHTML = this.nextLine();
     // Build 6: the countdown stays live while the screen is open (and the screen refreshes itself at the UTC reset).
     clearInterval(this.dhTimer);
     this.dhTimer = window.setInterval(() => {
       if (this.overlay !== 'dailyHub') { clearInterval(this.dhTimer); return; }
       if (this.today() !== id) { this.renderDailyHub(); return; }
-      $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
+      $('dhNext').innerHTML = this.nextLine();
     }, 20000);
     // Completion animation: today's mark pops the first time this screen shows it completed.
     if (day?.completed && load('bloq.dailyPop') !== id) {
@@ -425,6 +440,9 @@ export class App {
     requestAnimationFrame(() => { if (this.overlay === 'dailyHub') paintDailyPreview($<HTMLCanvasElement>('dhArt'), cells); });
   }
 
+  /** Countdown to the shared reset, with its local clock time. */
+  private nextLine(): string { return `Next challenge at ${this.resetClock()} · in <b>${fmtCountdown(this.msToNext())}</b>`; }
+
   /** The secondary screen: full month calendar, detailed streak figures and personal records. Scrolls if needed. */
   private openDailyHistory() {
     this.renderDailyHistory();
@@ -438,16 +456,15 @@ export class App {
     const rows: [string, string][] = [
       ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`],
       ['Completed', `${st.completed}`], ['This month', `${st.thisMonth}`],
-      ['Best daily', st.best || this.stats.bestDaily ? fmt(Math.max(st.best, this.stats.bestDaily)) : '–'], ['Today\u2019s best', day?.completed ? fmt(day.best) : '–'],
+      ['Best daily', st.best || this.stats.bestDaily ? fmt(Math.max(st.best, this.stats.bestDaily)) : '–'], [this.dailyIsLocalToday() ? 'Today\u2019s best' : 'Current challenge best', day?.completed ? fmt(day.best) : '–'],
     ];
     $('dhHistStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
     this.renderCalendar();
     const recs = bestDays(this.daily, 5);
     $('dhRecords').innerHTML = recs.length
-      ? recs.map((r, i) => `<li><span class="rk">${i + 1}</span><span class="rd">${dayLabel(r.id)}</span><b>${fmt(r.best)}</b></li>`).join('')
+      ? recs.map((r, i) => `<li><span class="rk">${i + 1}</span><span class="rd">${this.dailyDate(r.id)}</span><b>${fmt(r.best)}</b></li>`).join('')
       : '<li class="empty">Complete a Daily Challenge to set your first record.</li>';
-    const local = new Date(Date.UTC(2000, 0, 1)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    $('dhNote').textContent = `A new challenge starts every day at midnight UTC (${local} your time). Everyone plays the same board and pieces; replays are allowed and your first and best scores are both kept.`;
+    $('dhNote').textContent = `A new challenge starts every day at ${this.resetClock()} your time, the same moment for every player. Everyone plays the same board and pieces; replays are allowed and your first and best scores are both kept.`;
   }
 
   private msToNext() {
@@ -456,12 +473,12 @@ export class App {
   }
 
   private renderCalendar() {
-    const today = this.today();
+    const today = this.labelOf(this.today());
     const { y, m } = this.calMonth;
-    const cal = monthCalendar(this.daily, today, y, m);
+    const cal = monthCalendar(recordsByLabel(this.daily, this.dayShift()), today, y, m);
     $('calMonth').textContent = `${MONTHS[m - 1]} ${y}`;
     const dows = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<span class="dow">${d}</span>`).join('');
-    const label = { completed: 'completed', today: 'today', missed: 'not played', future: 'upcoming', before: '' } as const;
+    const label = { completed: 'completed', today: 'current challenge', missed: 'not played', future: 'upcoming', before: '' } as const;
     $('calGrid').innerHTML = dows + '<span></span>'.repeat(cal.leading) + cal.days.map((d) =>
       `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}${d.state === 'completed' ? '<i aria-hidden="true">✓</i>' : ''}</span>`).join('');
     const [ty, tm] = today.split('-').map(Number);
@@ -849,7 +866,7 @@ export class App {
       // Daily: the bar shows placements used of the limit; no levels.
       const used = st.stats.moves, limit = st.daily.limit;
       $('levelNum').textContent = 'DAILY';
-      $('levelTitle').textContent = dayLabel(st.daily.id, false).toUpperCase();
+      $('levelTitle').textContent = this.dailyDate(st.daily.id, false).toUpperCase();
       $('levelPts').innerHTML = `<b>${used}</b> / ${limit} placements`;
       $('levelLeft').textContent = used >= limit ? 'COMPLETE' : `${limit - used} left`;
       $<HTMLElement>('levelFill').style.width = `${((used / limit) * 100).toFixed(1)}%`;
@@ -1009,9 +1026,9 @@ export class App {
     sfx.gameOver(); haptic(up.newBest ? 'record' : 'clear');
     if (up.newBest && up.previousBest > 0) setTimeout(() => sfx.record(), 500);
     $('drKicker').textContent = up.newBest && up.previousBest > 0 ? 'NEW DAILY BEST' : summary.fullRun ? 'DAILY CHALLENGE COMPLETE' : 'NO MOVES LEFT';
-    $('drDate').textContent = `${dayLabel(id)} (UTC)`;
+    $('drDate').textContent = this.dailyDate(id);
     this.countUp($('drScore'), st.score, false);
-    $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Today's best ${fmt(day.best)}`;
+    $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Best ${fmt(day.best)}`;
     $('drFirst').textContent = day.first !== null && (run.attempt > 1 || !up.firstCompletion) ? `First attempt ${fmt(day.first)} · attempt ${run.attempt}` : 'First attempt';
     $('drPlaced').textContent = `${st.stats.moves}/${st.daily!.limit}`;
     $('drLines').textContent = fmt(st.stats.linesCleared);
@@ -1023,7 +1040,8 @@ export class App {
     $('drStreak').textContent = `${sk.current} day${sk.current === 1 ? '' : 's'}`;
     $('drRank').textContent = '–';
     $('drNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
-    this.lastDailyInfo = { day: id, score: st.score, rank: null, streak: sk.current, message: up.newBest && up.previousBest > 0 ? 'Can you beat my daily score?' : "Today's BLOQ challenge is complete.", material: currentMaterial() };
+    // The share card shows the challenge's local date.
+    this.lastDailyInfo = { day: this.labelOf(id), score: st.score, rank: null, streak: sk.current, message: up.newBest && up.previousBest > 0 ? 'Can you beat my daily score?' : "Today's BLOQ challenge is complete.", material: currentMaterial() };
     this.view.fade = 1;
     $('toast').classList.remove('on');
     this.openOverlay('dailyResults');
@@ -1080,7 +1098,7 @@ export class App {
       const rows: [string, string][] = key === 'classic' ? [['Personal best', fmt(s.bestScore)], ...(s.legacyBestScore ? [['Build 3 rules best', fmt(s.legacyBestScore)] as [string, string]] : [])]
         : key === 'level' ? [['Highest level', `${s.highestLevel} · ${levelTitle(this.cfg.progression, s.highestLevel)}`]]
         : key === 'chain' ? [['Largest chain', s.maxChain ? `×${s.maxChain}` : '–'], ['Largest in Overdrive', s.odMaxChain ? `×${s.odMaxChain}` : '–']]
-        : [["Today's best", this.daily.days[today]?.completed ? fmt(this.daily.days[today].best) : 'Not played yet'], ...days.map(([id, d]) => [dayLabel(id), fmt(d.best)] as [string, string])];
+        : [[this.dailyIsLocalToday() ? "Today's best" : 'Current challenge best', this.daily.days[today]?.completed ? fmt(this.daily.days[today].best) : 'Not played yet'], ...days.map(([id, d]) => [this.dailyDate(id), fmt(d.best)] as [string, string])];
       return rows.map(([k, v], i) => `<li class="${i === 0 ? 'me' : ''}"><span class="rk">${i === 0 ? '★' : ''}</span><span>${k}</span><span class="sc">${v}</span></li>`).join('');
     };
     $('rankList').innerHTML = personal();
@@ -1996,7 +2014,7 @@ export class App {
     if (!info) return;
     track('share_selected', { mode: 'daily', day: info.day, message: info.message, rank: info.rank ?? 0 });
     const card = renderDailyShareCard(info);
-    const outcome = await shareImage(card, `I scored ${fmt(info.score)} in today's BLOQ Daily Challenge (${dayLabel(info.day)}). ${info.message}`);
+    const outcome = await shareImage(card, `I scored ${fmt(info.score)} in the BLOQ Daily Challenge for ${dayLabel(info.day)}. ${info.message}`);
     if (outcome === 'downloaded') this.toast('Result image saved');
   }
 
