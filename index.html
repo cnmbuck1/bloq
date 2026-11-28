@@ -22,13 +22,19 @@
       </header>
       <canvas id="homeArt" class="home-art" aria-hidden="true"></canvas>
       <div class="home-cards">
+        <button id="btnContinue" class="mode-card classic" aria-describedby="homeSaved homeSavedBest" hidden>
+          <span class="mc-text"><span class="mc-title">CONTINUE CLASSIC</span>
+          <span class="mc-sub" id="homeSaved"></span>
+          <span class="mc-sub" id="homeSavedBest"></span></span>
+          <span class="mc-go" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span>
+        </button>
         <button id="btnPlay" class="mode-card classic" aria-describedby="homeBest homeLevel">
           <span class="mc-text"><span class="mc-title">PLAY CLASSIC</span>
           <span class="mc-sub" id="homeBest"></span>
           <span class="mc-sub" id="homeLevel"></span></span>
           <span class="mc-go" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span>
         </button>
-        <button id="btnContinue" class="btn btn-secondary btn-continue" hidden>CONTINUE CLASSIC</button>
+        <button id="btnNewRun" class="btn btn-secondary btn-newrun" hidden>New Classic Run</button>
         <button id="btnDaily" class="mode-card daily" aria-describedby="homeDaily homeStreak">
           <span class="mc-text"><span class="mc-title">DAILY CHALLENGE</span>
           <span class="mc-sub" id="homeDaily">Today's challenge awaits</span>
@@ -53,6 +59,7 @@
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><rect x="6.5" y="5" width="3.6" height="14" rx="1.4" fill="currentColor"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.4" fill="currentColor"/></svg>
         </button>
         <canvas id="navLogo" class="nav-logo" role="img" aria-label="BLOQ"></canvas>
+        <div class="hud-note" id="hudNote" aria-live="polite"><span class="hn-text" id="hudNoteText"></span><button class="hn-x" id="hudNoteX" aria-label="Dismiss tip" tabindex="-1"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg></button></div>
         <button class="btn-round" id="btnGameSettings" aria-label="Settings">
           <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><circle cx="12" cy="12" r="3.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
         </button>
@@ -95,7 +102,6 @@
       </div>
       <div class="play-area" id="playArea">
         <canvas id="board" class="board" role="application" aria-label="Game board and piece tray. Drag pieces from the tray onto the board."></canvas>
-        <div class="message" id="message" aria-live="assertive"></div>
         <button class="od-btn" id="btnOverdrive" aria-label="Overdrive charging"></button>
         <button class="rotate-btn" data-slot="0" aria-label="Rotate piece 1"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         <button class="rotate-btn" data-slot="1" aria-label="Rotate piece 2"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12a7 7 0 1 1-2.05-4.95" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M19.5 3.5v4.4h-4.4" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
@@ -112,6 +118,15 @@
         <button class="btn btn-secondary" id="btnRestart">Restart</button>
         <button class="btn btn-secondary" id="btnPauseSettings">Settings</button>
         <button class="btn btn-ghost" id="btnPauseHome">Home</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="confirmNew" hidden role="alertdialog" aria-modal="true" aria-labelledby="cnTitle" aria-describedby="cnText">
+      <div class="sheet confirm">
+        <h2 id="cnTitle">Replace your saved run?</h2>
+        <p class="cn-text" id="cnText">This replaces your saved Classic run.</p>
+        <button class="btn btn-primary" id="btnCnKeep" data-focus>CANCEL</button>
+        <button class="btn btn-secondary btn-danger" id="btnCnReplace">Start New Run</button>
       </div>
     </div>
 
@@ -263,7 +278,7 @@
           <li><span class="rot-chip" aria-hidden="true">⟳</span> <b>Rotate</b> a piece with its button. Each turn uses 1 Rotation Energy; each line you clear restores 1, up to 3.</li>
           <li><b>Level up</b> as your score grows. Each level refills your Rotation Energy, brings tougher pieces and, every two levels, a new block material.</li>
           <li><span class="shield-chip" aria-hidden="true">✓</span> <b>Combo Protection</b> lets an active combo survive one placement that clears nothing. Clear again to restore it.</li>
-          <li><span class="od-chip" aria-hidden="true">2×</span> <b>Overdrive</b> charges as you clear lines, fire Pulses and empty the board. When it reads READY, tap it: your next five placements score double and rotations are free.</li>
+          <li><span class="od-chip" aria-hidden="true">2×</span> <b>Overdrive</b> charges as you clear lines, fire Pulses and empty the board. When it reads READY, tap it: your next five placements score double and <b>rotations are free</b> (no energy used). The gold board frame and the 2× POINTS chip count down the placements left.</li>
           <li><b>Perfect Clear</b>: empty the whole board in one move for a 2,000 point bonus.</li>
           <li><b>Daily Challenge</b>: everyone gets the same board and pieces each day. You have 30 placements to score as much as you can.</li>
           <li>The game ends when none of your pieces fit, even with the rotations you can afford. A charged Overdrive keeps it going if its free rotations would open a move.</li>
@@ -347,7 +362,7 @@
           <button class="btn btn-ghost" id="devReset">Reset all local data</button>
         </div>
         <button class="btn btn-primary" data-close>DONE</button>
-        <p class="version" id="version">BLOQ Build 8</p>
+        <p class="version" id="version">BLOQ Build 9</p>
       </div>
     </div>
 

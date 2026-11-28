@@ -318,6 +318,9 @@ export class Animator {
     this.at(L0, () => {
       this.celebrate = { start: L0, dur: levelMs * 0.95, gold: true };
       this.hooks.onLevelUp?.(result);
+      // Build 9: the move has fully resolved by now, so input is released here. The gold frame, energy sparks and
+      // material wave below keep playing as pure visuals; the next placement settles them at once.
+      queueMicrotask(() => { if (this.current === result) this.complete(); });
       // Level-up energy: gold-and-cyan sparks from the top of the board into the meter.
       const lvlE = result.levelEnergy ?? 0;
       for (let i = 0; i < lvlE; i++) {

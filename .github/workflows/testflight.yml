@@ -12,7 +12,7 @@ name: TestFlight
 on:
   workflow_dispatch:
   push:
-    branches: [claude/project-thread-b1fop0]
+    branches: [claude/project-thread-b1fop0, claude/project-thread-1crnqn]
 
 concurrency:
   group: testflight
