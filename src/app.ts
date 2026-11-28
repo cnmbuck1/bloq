@@ -1347,12 +1347,15 @@ export class App {
     if (rows < 2) return;
     const el = $('affirm');
     const [text, kind] = rows >= 4 ? ['Amazing!', 'amazing'] : rows === 3 ? ['Excellent!', 'excellent'] : ['Great!', 'great'];
-    el.textContent = text;
+    // Build 11: a ribbon sweeps across the middle of the board. It ignores touches, so play continues underneath.
+    const L = this.view.layout;
+    if (L) el.style.top = `${L.by + L.boardPx / 2}px`;
+    $('affirmText').textContent = text;
     el.className = 'affirm';
     void el.offsetWidth;
     el.className = `affirm on ${kind}`;
     clearTimeout(this.affirmTimer);
-    this.affirmTimer = window.setTimeout(() => { el.className = 'affirm'; }, 1300);
+    this.affirmTimer = window.setTimeout(() => { el.className = 'affirm'; }, 1450);
   }
   private affirmTimer = 0;
 
