@@ -2,7 +2,8 @@
 // the shareable results card and the app icon / launch art. All generated locally.
 
 import { drawOrbIcon } from '../brand/cnmbuck-orb';
-import { drawBlock, paintFrame, roundRect, setRenderScale, type MaterialLook } from '../render/blocks';
+import { GEM_RISE, GEM_SPAN, compartmentImage, gemImage, gemsReady, type GemKey } from '../render/gems';
+import { drawBlock, glintImage, isGemStyle, paintBoard8, paintEmptyCell, paintFrame, roundRect, setRenderScale, type MaterialLook } from '../render/blocks';
 
 const MAGENTA_LOOK: MaterialLook = { id: 'magenta', color: '#D936AD', highlight: '#FF9BEA', shadow: '#64164F' };
 import { THEME, rgba } from '../render/theme';
@@ -99,9 +100,95 @@ const MOTES = Array.from({ length: 26 }, (_, i) => {
   return { x: h(1), y: h(2), r: 0.6 + h(3) * 1.6, sp: 0.15 + h(4) * 0.5, gold: h(5) > 0.72, ph: h(6) * 6.28 };
 });
 
+/** Draws a gem render so the stone is `size` wide and centred on (cx, cy). Returns the image rect (for glints). */
+function gemAt(g: CanvasRenderingContext2D, key: GemKey, cx: number, cy: number, size: number, alpha = 1) {
+  const im = gemImage(key);
+  if (!im) return null;
+  const w = size / GEM_SPAN, x = cx - w / 2, y = cy - w / 2 + w * GEM_RISE;
+  // soft contact shadow below and to the right (light from the upper left)
+  const sh = g.createRadialGradient(cx + size * 0.06, cy + size * 0.12, 0, cx + size * 0.06, cy + size * 0.12, size * 0.72);
+  sh.addColorStop(0, `rgba(0,0,0,${0.45 * alpha})`); sh.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = sh; g.fillRect(cx - size, cy - size, size * 2.2, size * 2.2);
+  g.globalAlpha = alpha;
+  g.drawImage(im, x, y, w, w);
+  g.globalAlpha = 1;
+  return { im, x, y, w };
+}
+
+const ORBIT: GemKey[] = ['ruby', 'topaz', 'emerald', 'sapphire', 'amethyst', 'amber', 'pink', 'aqua'];
+
+/**
+ * Build 8 menu centrepiece: a crystalline energy core. A Pulse crystal floats at the centre of a tilted ring of
+ * gemstones that turns slowly round it (the far side of the ring passes behind the core and dims); now and then a
+ * stone catches the light, and every few seconds the core discharges a soft cyan ring.
+ */
+function paintEnergyCore(g: CanvasRenderingContext2D, w: number, h: number, t: number, reduced: boolean) {
+  const T = reduced ? 0 : t;
+  const cx = w / 2, cy = h * 0.5;
+  const S = Math.min(w * 0.2, h * 0.3);
+  const R = Math.min(w * 0.38, h * 0.95), Rv = R * 0.36;
+  // light pool and motes
+  const pool = g.createRadialGradient(cx, cy, 0, cx, cy, R * 1.15);
+  pool.addColorStop(0, rgba(THEME.pulse, 0.2)); pool.addColorStop(0.45, rgba(THEME.pulse, 0.05)); pool.addColorStop(1, rgba(THEME.pulse, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  for (const m of MOTES) {
+    const y = ((m.y - (T * 0.00002 * m.sp * 10)) % 1 + 1) % 1;
+    const x = m.x + Math.sin(T * 0.0004 * m.sp + m.ph) * 0.02;
+    const a = 0.2 + 0.3 * (0.5 + 0.5 * Math.sin(T * 0.002 * m.sp + m.ph));
+    g.fillStyle = rgba(m.gold ? THEME.gold : THEME.pulse, a * (m.gold ? 0.8 : 0.5));
+    g.beginPath(); g.arc(x * w, y * h, m.r, 0, Math.PI * 2); g.fill();
+  }
+  // the orbit itself: a faint machined ring of light
+  g.save();
+  g.strokeStyle = rgba(THEME.pulse, 0.14); g.lineWidth = 1.2;
+  g.beginPath(); g.ellipse(cx, cy + S * 0.05, R, Rv, 0, 0, Math.PI * 2); g.stroke();
+  g.restore();
+  const spin = T * 0.00022;
+  const stones = ORBIT.map((key, i) => {
+    const a = spin + (i / ORBIT.length) * Math.PI * 2;
+    const depth = Math.sin(a); // -1 far (top of the ellipse), +1 near
+    return { key, i, x: cx + Math.cos(a) * R, y: cy + S * 0.05 + depth * Rv, depth, size: S * (0.42 + 0.16 * (depth + 1) / 2) };
+  }).sort((a, b) => a.depth - b.depth);
+  const drawStone = (st: typeof stones[number]) => {
+    const alpha = 0.55 + 0.45 * (st.depth + 1) / 2;
+    const r = gemAt(g, st.key, st.x, st.y, st.size, alpha);
+    if (r && !reduced) {
+      const ph = ((T * 0.00035 + st.i * 0.37) % 2.4);
+      if (ph < 1) glintImage(g, r.im, r.x, r.y, r.w, ph, 0.7);
+    }
+  };
+  for (const st of stones) if (st.depth < 0) drawStone(st);
+  // the core: the Pulse crystal, breathing gently, with its energy glow
+  const bob = reduced ? 0 : Math.sin(T * 0.0014) * S * 0.03;
+  const breathe = reduced ? 0.5 : 0.5 + 0.5 * Math.sin(T * 0.0026);
+  const prev = g.globalCompositeOperation;
+  g.globalCompositeOperation = 'lighter';
+  const glow = g.createRadialGradient(cx, cy + bob, 0, cx, cy + bob, S * 1.05);
+  glow.addColorStop(0, rgba(THEME.pulse, 0.32 + 0.14 * breathe)); glow.addColorStop(1, rgba(THEME.pulse, 0));
+  g.fillStyle = glow; g.fillRect(cx - S * 1.1, cy - S * 1.1 + bob, S * 2.2, S * 2.2);
+  g.globalCompositeOperation = prev;
+  const core = gemAt(g, 'pulse', cx, cy + bob, S);
+  if (core && !reduced) {
+    const ph = (T % 5200) / 5200 * 1.8;
+    if (ph < 1) glintImage(g, core.im, core.x, core.y, core.w, ph, 0.8);
+  }
+  for (const st of stones) if (st.depth >= 0) drawStone(st);
+  if (reduced) return;
+  const phase = (t % 6500) / 6500;
+  if (phase < 0.16) {
+    const p = phase / 0.16;
+    g.save();
+    g.strokeStyle = rgba(THEME.pulse, 0.6 * (1 - p)); g.lineWidth = 1.5 + 2.5 * (1 - p);
+    g.shadowColor = THEME.pulse; g.shadowBlur = 12;
+    g.beginPath(); g.ellipse(cx, cy + S * 0.05, R * (0.3 + 0.8 * p), Rv * (0.3 + 0.8 * p), 0, 0, Math.PI * 2); g.stroke();
+    g.restore();
+  }
+}
+
 export function paintHomeArt(canvas: HTMLCanvasElement, t: number, reduced: boolean) {
   const { g, w, h } = fit(canvas);
   g.clearRect(0, 0, w, h);
+  if (gemsReady()) { paintEnergyCore(g, w, h, t, reduced); return; }
   const cols = 8, rows = ART.length;
   const pitch = Math.min(w / (cols + 1.2), h / (rows + 1.1));
   const cell = pitch * 0.9;
@@ -176,17 +263,22 @@ export function paintMaterialSwatch(canvas: HTMLCanvasElement, m: MaterialLook, 
 export function paintSplash(canvas: HTMLCanvasElement) {
   const { g, w, h } = fit(canvas);
   g.fillStyle = THEME.bg; g.fillRect(0, 0, w, h);
-  const size = Math.min(w, h) * 0.34;
-  drawOrbIcon(g, size, w / 2 - size / 2, h / 2 - size * 0.75);
-  g.fillStyle = THEME.text;
-  g.font = `700 ${Math.round(size * 0.13)}px ${FONT}`;
+  background(g, w, h);
+  // Build 12: matches the native launch screen (mark scaled from the shorter side of a 2732 square).
+  const unit = Math.max(w, h);
+  const mark = unit * 0.11;
+  drawBloqMark(g, w / 2, h / 2 - mark * 0.42, mark);
+  drawLogo(g, w / 2, h / 2 + mark * 0.62, unit * 0.042);
+  g.fillStyle = THEME.textDim;
+  const fs = Math.round(Math.min(w, h) * 0.032);
+  g.font = `700 ${fs}px ${FONT}`;
   g.textBaseline = 'middle';
   const label = 'CNMBUCK STUDIOS';
-  const sp = size * 0.03;
+  const sp = fs * 0.22;
   const width = [...label].reduce((a, ch) => a + g.measureText(ch).width + sp, -sp);
   let x = w / 2 - width / 2;
   g.textAlign = 'left';
-  for (const ch of label) { g.fillText(ch, x, h / 2 + size * 0.45); x += g.measureText(ch).width + sp; }
+  for (const ch of label) { g.fillText(ch, x, h * 0.9); x += g.measureText(ch).width + sp; }
 }
 
 export interface ShareInfo {
@@ -334,27 +426,124 @@ export function renderDailyShareCard(info: DailyShareInfo): HTMLCanvasElement {
   return c;
 }
 
-/** App icon (opaque, square): the Cnmbuck Orb as hero, set into a machined BLOQ board corner. */
+/**
+ * Build 12 BLOQ mark: a 2×2 block of the game's own gemstones set into board compartments, with the Pulse crystal
+ * in the lower right giving off a soft cyan light. No studio orb, so the game stands on its own.
+ * Draws the mark centred on (cx, cy) with total width `size`. Returns false when the gem renders are not loaded yet.
+ */
+export function drawBloqMark(g: CanvasRenderingContext2D, cx: number, cy: number, size: number): boolean {
+  if (!gemsReady()) return false;
+  const pitch = size / 2, cell = pitch * 0.9;
+  const x0 = cx - size / 2, y0 = cy - size / 2;
+  // cyan light pooling from the Pulse crystal
+  const lx = x0 + pitch * 1.5, ly = y0 + pitch * 1.5;
+  const pool = g.createRadialGradient(lx, ly, 0, lx, ly, size * 0.95);
+  pool.addColorStop(0, 'rgba(89,221,235,0.30)'); pool.addColorStop(0.45, 'rgba(89,221,235,0.08)'); pool.addColorStop(1, 'rgba(89,221,235,0)');
+  g.fillStyle = pool; g.fillRect(cx - size * 1.2, cy - size * 1.2, size * 2.4, size * 2.4);
+  // a recessed tray holding the four stones
+  const pad = size * 0.045, r = size * 0.09;
+  g.save();
+  roundRect(g, x0 - pad, y0 - pad, size + pad * 2, size + pad * 2, r);
+  const tray = g.createLinearGradient(0, y0 - pad, 0, y0 + size + pad);
+  tray.addColorStop(0, '#0B121C'); tray.addColorStop(1, '#152131');
+  g.fillStyle = tray; g.fill();
+  g.lineWidth = Math.max(1, size * 0.012); g.strokeStyle = 'rgba(148,190,214,0.35)'; g.stroke();
+  g.restore();
+  const tile = compartmentImage();
+  const stones: GemKey[] = ['pink', 'amber', 'sapphire', 'pulse'];
+  stones.forEach((key, i) => {
+    const c = i % 2, rr = Math.floor(i / 2);
+    const tx = x0 + c * pitch + (pitch - cell) / 2, ty = y0 + rr * pitch + (pitch - cell) / 2;
+    if (tile) g.drawImage(tile, tx, ty, cell, cell);
+    if (key === 'pulse') {
+      const gx = tx + cell / 2, gy = ty + cell / 2;
+      const halo = g.createRadialGradient(gx, gy, cell * 0.2, gx, gy, cell * 0.75);
+      halo.addColorStop(0, 'rgba(120,235,245,0.55)'); halo.addColorStop(1, 'rgba(89,221,235,0)');
+      g.fillStyle = halo; g.fillRect(gx - cell, gy - cell, cell * 2, cell * 2);
+    }
+    gemAt(g, key, tx + cell / 2, ty + cell / 2, cell * 0.92);
+  });
+  return true;
+}
+
+/** App icon (opaque, square): the BLOQ mark on the midnight background. */
 export function renderAppIcon(size = 1024): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
   background(g, size, size);
-  const cell = size * 0.19, pitch = size * 0.215, o = size * 0.06;
-  const blocks: [number, number, boolean][] = [[0, 0, false], [0, 1, false], [1, 0, false], [3, 3, false], [3, 4, true], [4, 3, false], [4, 4, false]];
-  for (const [r, cc, p] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, p, 0, true, { material: MAGENTA_LOOK });
-  drawOrbIcon(g, size * 0.74, size * 0.13, size * 0.13);
+  drawBloqMark(g, size / 2, size / 2, size * 0.62);
   return c;
 }
 
-/** Launch screen (square, centre-safe): the BLOQ wordmark on graphite. */
+/** Launch screen (square, centre-safe): the BLOQ mark above the wordmark. The in-app splash matches it. */
 export function renderLaunch(size = 2732): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
   background(g, size, size);
-  drawLogo(g, size / 2, size / 2, size * 0.075);
+  const mark = size * 0.11;
+  drawBloqMark(g, size / 2, size / 2 - mark * 0.42, mark);
+  drawLogo(g, size / 2, size / 2 + mark * 0.62, size * 0.042);
   return c;
+}
+
+/**
+ * Build 5 Daily landing art: a compact cluster of today's blocks (magenta with one Pulse) on a soft champagne
+ * light pool. Static (no animation), so it costs nothing while the screen is open.
+ */
+export function paintDailyArt(canvas: HTMLCanvasElement) {
+  const { g, w, h } = fit(canvas);
+  g.clearRect(0, 0, w, h);
+  if (w < 4 || h < 4) return;
+  const LAYOUT = ['.XX..', 'XXPX.', '.XXXX'];
+  const cols = 5, rows = LAYOUT.length;
+  const pitch = Math.min(w / (cols + 0.6), h / (rows + 0.5));
+  const cell = pitch * 0.92;
+  const ox = (w - cols * pitch) / 2, oy = (h - rows * pitch) / 2;
+  const pool = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.max(w, h) * 0.42);
+  pool.addColorStop(0, rgba(THEME.gold, 0.13)); pool.addColorStop(0.55, rgba('#D936AD', 0.05)); pool.addColorStop(1, rgba(THEME.gold, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  LAYOUT.forEach((line, r) => [...line].forEach((ch, c) => {
+    if (ch === '.') return;
+    drawBlock(g, ox + c * pitch + (pitch - cell) / 2, oy + r * pitch + (pitch - cell) / 2, cell, ch === 'P', 0, true, { material: MAGENTA_LOOK });
+  }));
+}
+
+/**
+ * Build 6 Daily preview: today's actual starting board (the same puzzle everyone gets), as a miniature recessed
+ * board with the real crystals. Pulse Blocks show as Pulse crystals.
+ */
+export function paintDailyPreview(canvas: HTMLCanvasElement, cells: ({ pulse?: boolean } | null)[], size = 8) {
+  const { g, w, h } = fit(canvas);
+  g.clearRect(0, 0, w, h);
+  if (w < 4 || h < 4) return;
+  const side = Math.min(w - 8, h - 8);
+  const x0 = (w - side) / 2, y0 = (h - side) / 2;
+  const pool = g.createRadialGradient(w / 2, h / 2, side * 0.3, w / 2, h / 2, Math.min(w, h) * 0.5);
+  pool.addColorStop(0, rgba(THEME.gold, 0.08)); pool.addColorStop(1, rgba(THEME.gold, 0));
+  g.fillStyle = pool; g.fillRect(0, 0, w, h);
+  const frame = Math.max(4, side * 0.035);
+  const pad = frame + side * 0.012;
+  const pitch = (side - pad * 2) / size, cell = pitch * 0.9;
+  // Build 8: the preview is the real board material (machined compartments) with the same gemstones.
+  const tile = compartmentImage();
+  if (isGemStyle() && tile) {
+    paintBoard8(g, x0, y0, side, frame, pitch * 0.26, pad, pitch, tile);
+    const c8 = pitch * 0.92;
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+      const v = cells[r * size + c];
+      if (v) drawBlock(g, x0 + pad + c * pitch + (pitch - c8) / 2, y0 + pad + r * pitch + (pitch - c8) / 2, c8, !!v.pulse, 0, true, { material: MAGENTA_LOOK });
+    }
+    return;
+  }
+  paintFrame(g, x0, y0, side, side, side * 0.06, frame, true);
+  for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+    const x = x0 + pad + c * pitch + (pitch - cell) / 2, y = y0 + pad + r * pitch + (pitch - cell) / 2;
+    const v = cells[r * size + c];
+    if (v) drawBlock(g, x, y, cell, !!v.pulse, 0, true, { material: MAGENTA_LOOK });
+    else paintEmptyCell(g, x, y, cell);
+  }
 }

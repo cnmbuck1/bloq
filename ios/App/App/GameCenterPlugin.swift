@@ -1,13 +1,10 @@
 // BLOQ Game Center bridge for Capacitor (Build 4). NOT YET VERIFIED ON A DEVICE.
 //
-// Setup (once the Xcode project exists via `npx cap add ios`):
-//   1. Copy this file into ios/App/App/ and add it to the App target.
-//   2. Enable the Game Center capability on the App target.
-//   3. In App Store Connect create the leaderboards listed in src/platform/gameCenter.ts (LEADERBOARDS):
-//      bloq.classic.score.r2, bloq.classic.level.r2, bloq.chain.largest (classic, best score kept), and
-//      bloq.daily.score as a *recurring* leaderboard that resets every 24 hours at 00:00 UTC.
-//   4. Register the plugin: in a custom bridge view controller,
-//      override func capacitorDidLoad() { bridge?.registerPluginInstance(GameCenterPlugin()) }
+// Wired in: the App target compiles this file, App.entitlements turns on Game Center, and
+// BloqBridgeViewController registers the plugin. Still needed in App Store Connect: the leaderboards listed in
+// src/platform/gameCenter.ts (LEADERBOARDS): bloq.classic.score.r2, bloq.classic.level.r2, bloq.chain.largest
+// (classic, best score kept), and bloq.daily.score as a *recurring* leaderboard that resets every 24 hours at
+// 00:00 UTC. Until they exist, sign-in works and score calls fail quietly.
 
 import Capacitor
 import GameKit

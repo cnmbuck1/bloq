@@ -7,7 +7,7 @@ import { KEYS, load, store } from './storage';
 export type AnalyticsEvent =
   | 'game_launched' | 'tutorial_started' | 'tutorial_completed' | 'tutorial_skipped'
   | 'game_started' | 'piece_placed' | 'invalid_placement' | 'lines_cleared' | 'pulse_activated'
-  | 'chain_size' | 'game_ended' | 'game_restarted' | 'game_abandoned' | 'share_selected'
+  | 'chain_size' | 'game_ended' | 'game_restarted' | 'game_abandoned' | 'saved_run_replaced' | 'share_selected'
   | 'rotation_performed' | 'rotation_denied' | 'rotation_then_placed' | 'rotation_then_clear' | 'save_reset'
   // Build 3
   | 'level_reached' | 'energy_restored_level_up' | 'material_tier_reached' | 'material_unlocked' | 'material_selected'

@@ -73,18 +73,24 @@ function tone(freq: number, start: number, dur: number, o: ToneOpts = {}) {
 function noise(start: number, dur: number, gain: number, from: number, to = from, q = 1.2, out: AudioNode | null = sfxBus, at?: number) {
   if (!ctx || !out) return;
   const t = at ?? ctx.currentTime + start;
-  const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.5);
-  const src = ctx.createBufferSource(); src.buffer = buf;
+  // Build 10: one shared noise buffer (the gain ramp below shapes each burst). Generating a fresh buffer per sound
+  // cost a few milliseconds of main-thread work on every big clear, Overdrive start/end and every Overdrive hat.
+  if (!noiseBuf || noiseBuf.sampleRate !== ctx.sampleRate) {
+    const len = Math.floor(ctx.sampleRate * 1.5);
+    noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = ctx.createBufferSource(); src.buffer = noiseBuf;
   const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q;
   f.frequency.setValueAtTime(from, t);
   if (to !== from) f.frequency.exponentialRampToValueAtTime(to, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   src.connect(f).connect(g).connect(out);
-  src.start(t);
+  const offset = Math.random() * Math.max(0, noiseBuf.duration - dur);
+  src.start(t, offset, Math.min(dur, noiseBuf.duration));
 }
+let noiseBuf: AudioBuffer | null = null;
 
 // Overlap limiting: the same sound retriggered within a few ms is skipped, so fast chains never pile up.
 const lastPlayed = new Map<string, number>();
@@ -108,7 +114,21 @@ const LADDER = [440, 523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.
 
 export const sfx = {
   /** Soft electronic click. */
-  select() { if (!ready() || !throttle('select', 40)) return; tone(vary(2200), 0, 0.03, { type: 'square', gain: 0.025, filter: 3500 }); },
+  select() {
+    if (!ready() || !throttle('select', 40)) return;
+    // Build 6: a short glassy tone as the crystal lifts (two close sine partials, slightly detuned each time)
+    const f = vary(1760, 30);
+    tone(f, 0, 0.09, { type: 'sine', gain: 0.035, to: f * 1.06 });
+    tone(f * 2.4, 0.005, 0.05, { type: 'sine', gain: 0.012 });
+  },
+  /** Build 6 interface button: a soft dry click (shares the select throttle so a button never double-sounds). */
+  click() { if (!ready() || !throttle('select', 40)) return; noise(0, 0.018, 0.08, vary(2600, 80), 2600, 3); tone(vary(1200, 25), 0, 0.025, { type: 'triangle', gain: 0.02 }); },
+  /** Build 6: Overdrive charge absorbed by the meter (tiny, rising with the level). */
+  odAbsorb(level: number) {
+    if (!ready() || !throttle('odabs', 70)) return;
+    const f = 900 + Math.min(100, level) * 9;
+    tone(vary(f, 20), 0, 0.07, { type: 'sine', gain: 0.022, to: f * 1.12 });
+  },
   /** Satisfying metallic snap. */
   place() {
     if (!ready() || !throttle('place', 40)) return;
@@ -117,6 +137,8 @@ export const sfx = {
     tone(120, 0, 0.07, { type: 'sine', gain: 0.22, to: 70 });
     // a second, softer detent as the block settles (mechanical lock)
     metal(vary(620, 30), 0.07, 0.05, 0.03);
+    // Build 6: the crystal rings very briefly as it seats
+    tone(vary(2637, 25), 0.075, 0.12, { type: 'sine', gain: 0.018 });
   },
   /** Precision mechanical movement: a servo glide between two detents. */
   rotate() {
@@ -129,8 +151,9 @@ export const sfx = {
   /** Subtle low-frequency feedback. */
   invalid() {
     if (!ready()) return;
-    tone(110, 0, 0.12, { type: 'sine', gain: 0.18, to: 85 });
-    tone(220, 0, 0.06, { type: 'triangle', gain: 0.03 });
+    // Build 6: muted — a soft low thud, no buzz
+    tone(110, 0, 0.11, { type: 'sine', gain: 0.12, to: 85, filter: 600 });
+    tone(220, 0, 0.05, { type: 'triangle', gain: 0.015, filter: 900 });
   },
   /** Rotation refused: no energy. */
   denied() {
@@ -150,6 +173,24 @@ export const sfx = {
       tone(f * 2.01, i * 0.05, 0.16, { type: 'triangle', gain: 0.015 });
     }
     if (lines >= 4) noise(0.12, 0.5, 0.05, 2000, 9000, 0.8);
+    // Build 6 crystal release: a scatter of short glass partials as the blocks fracture, more for bigger clears
+    const shards = 3 + Math.min(lines, 4) * 2;
+    for (let i = 0; i < shards; i++) tone(vary(2800 + Math.random() * 2600, 40), 0.03 + i * 0.018 + Math.random() * 0.01, 0.06 + Math.random() * 0.05, { type: 'sine', gain: 0.012 + 0.004 * Math.min(lines, 4) });
+    noise(0.02, 0.09, 0.05, 7000, 4000, 2.5);
+    // Build 8: two or more lines add a crystalline cascade (rising glass chimes, one run per extra line, a little
+    // longer and higher for each); four or more end on a bright held shimmer.
+    if (lines >= 2) {
+      const steps = Math.min(4 + (lines - 2) * 3, 12);
+      for (let i = 0; i < steps; i++) {
+        const f = LADDER[Math.min(lift + 2 + i, LADDER.length - 1)] * 2;
+        tone(vary(f, 10), 0.09 + i * 0.045, 0.22, { type: 'sine', gain: 0.022 + 0.004 * Math.min(lines, 4) });
+        tone(vary(f * 2.76, 15), 0.09 + i * 0.045, 0.08, { type: 'sine', gain: 0.006 });
+      }
+      if (lines >= 4) {
+        const t0 = 0.1 + steps * 0.045;
+        [1, 1.5, 2].forEach((m, i) => tone(LADDER[6] * m, t0, 0.7, { type: 'sine', gain: 0.03 / (1 + i) }));
+      }
+    }
   },
   /** Focused electronic burst; each wave in a chain rises and thickens. */
   pulse(wave: number, count: number) {

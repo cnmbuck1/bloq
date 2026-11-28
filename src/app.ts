@@ -12,7 +12,7 @@ import { SCENARIOS } from './dev/scenarios';
 import { boardFromArt } from './game/boardArt';
 import { GameSession } from './game/session';
 import {
-  ACHIEVEMENTS, achievementProgress, activeMaterial, grantProgress, nextMilestone, type AchievementDef, type AchievementIcon,
+  ACHIEVEMENTS, achievementProgress, achievementWeight, achievementsInOrder, activeMaterial, grantProgress, nextMaterial, nextMilestone, type AchievementDef, type AchievementIcon,
 } from './game/achievements';
 import { loadSettings, saveSettings, type Settings } from './game/settings';
 import {
@@ -20,7 +20,7 @@ import {
   recordSessionGames, syncDaily, type LifetimeStats, type RecordContext,
 } from './game/stats';
 import {
-  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, type DailyRecords,
+  monthCalendar, parseDailyRecords, recordDailyResult, recordDailyStart, streaks, weekStrip, bestDays, labelShift, recordsByLabel, localDateId, type DailyRecords,
 } from './game/dailyRecords';
 import {
   LEADERBOARDS, flushQueue, gameCenterSupported, loadBoard, openDashboard, pruneExpired, queueSubmission, type LeaderboardKey, type PendingSubmission,
@@ -31,9 +31,10 @@ import { haptic, setHapticIntensity, setHapticsEnabled, type HapticIntensity } f
 import { music, setMusicEnabled, setMusicVolume, setSfxVolume, setSoundEnabled, sfx, suspendAudio, unlockAudio } from './platform/audio';
 import { shareImage } from './platform/share';
 import { KEYS, load, remove, store } from './platform/storage';
-import { DEFAULT_VISUALS, currentMaterial, setHighContrast, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
+import { preloadGems } from './render/gems';
+import { DEFAULT_VISUALS, currentMaterial, setBlockStyle, setHighContrast, type BlockStyle, setMaterial, setVisualParams, type VisualParams } from './render/blocks';
 import { GameView } from './render/gameView';
-import { paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
+import { paintDailyPreview, paintHomeArt, paintLogoCanvas, paintMaterialSwatch, paintSplash, renderDailyShareCard, renderShareCard, type DailyShareInfo, type ShareInfo } from './ui/art';
 import { InputController } from './ui/input';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -87,7 +88,7 @@ const defaultDev = (): DevConfig => ({
 });
 
 type ScreenId = 'splash' | 'home' | 'game';
-type OverlayId = 'pause' | 'results' | 'stats' | 'how' | 'settings' | 'materials' | 'dailyResults' | 'dailyHub' | 'rankings';
+type OverlayId = 'pause' | 'confirmNew' | 'results' | 'stats' | 'how' | 'settings' | 'materials' | 'dailyResults' | 'dailyHub' | 'dailyHistory' | 'rankings';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 /** A challenge id as a friendly date ("27 November 2026"); it is a UTC date, shown as such. */
 const dayLabel = (id: string, year = true) => { const [y, m, d] = id.split('-').map(Number); return `${d} ${MONTHS[m - 1]}${year ? ` ${y}` : ''}`; };
@@ -142,8 +143,12 @@ export class App {
 
   private raf = 0;
   private lastFrame = 0;
-  private messageQueue: { text: string; kind: string; sub: string[] }[] = [];
-  private messageTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Build 9 HUD note: a short move callout (wins the slot while it shows), queued notices, and a dismissible tip. */
+  private note: { text: string; kind: string; at: number; until: number } | null = null;
+  private noteQueue: { text: string; kind: string; ms: number }[] = [];
+  private noteTip: { text: string; left: number } | null = null;
+  private tipShownAt = 0;
+  private noteTimer: ReturnType<typeof setTimeout> | null = null;
   private toastTimer: ReturnType<typeof setTimeout> | null = null;
   private rotateBtns: HTMLButtonElement[];
 
@@ -174,6 +179,7 @@ export class App {
     track('game_launched');
     track('session_started', { games: this.stats.gamesPlayed, days: this.stats.days.length, firstDay: this.stats.days[0] ?? '' });
     this.checkSave();
+    this.creditEarlier();
     this.flushGameCenter();
     this.startSplash();
   }
@@ -182,6 +188,7 @@ export class App {
 
   private show(id: ScreenId) {
     this.screen = id;
+    if (id !== 'game') this.clearNotes();
     document.querySelectorAll('.screen').forEach((el) => el.classList.toggle('active', el.id === id));
     if (id === 'home') this.refreshHome();
     if (id === 'game') this.layoutGame();
@@ -190,6 +197,8 @@ export class App {
 
   private layoutGame() {
     this.view.resize();
+    // Build 10: build glow, shard and Overdrive crystal sprites in idle time, not on the frame that first needs them.
+    this.view.warmOverdrive();
     paintLogoCanvas($<HTMLCanvasElement>('navLogo'));
     this.refreshRotateButtons();
     this.updateOverdriveHud();
@@ -239,18 +248,40 @@ export class App {
     const s = this.stats;
     $('homeBest').innerHTML = s.bestScore > 0 ? `Personal best <b>${fmt(s.bestScore)}</b>` : s.legacyBestScore > 0 ? `Build 3 rules best <b>${fmt(s.legacyBestScore)}</b>` : 'Place, clear and chain Pulses';
     $('homeLevel').innerHTML = s.highestLevel > 1 ? `Highest level <b>${s.highestLevel}</b> · ${levelTitle(this.cfg.progression, s.highestLevel)}` : '';
-    $('btnContinue').hidden = !inspectSave(load(KEYS.save), this.cfg).data;
-    // Daily card: today's status, streak, countdown.
+    // Build 9: a saved Classic run makes Continue the primary action; starting fresh is the smaller action below it.
+    const run = inspectSave(load(KEYS.save), this.cfg).data;
+    $('btnContinue').hidden = !run;
+    $('btnNewRun').hidden = !run;
+    $('btnPlay').hidden = !!run;
+    if (run) {
+      $('homeSaved').innerHTML = `Score <b>${fmt(run.state.score)}</b> · Level <b>${run.state.level ?? 1}</b>`;
+      $('homeSavedBest').innerHTML = s.bestScore > 0 ? `Personal best <b>${fmt(s.bestScore)}</b>` : '';
+    }
+    // Daily card: today's state with the best that applies to it, then the streak. Never truncated: it wraps instead.
     const id = this.today();
     const day = this.daily.days[id];
     const sk = streaks(this.daily, id);
     const saved = this.dailySave();
-    $('homeDaily').innerHTML = day?.completed ? `Completed · best <b>${fmt(day.best)}</b> · next in ${fmtCountdown(this.msToNext())}`
-      : saved ? `In progress · <b>${saved.state.stats.moves}/${saved.state.daily?.limit ?? 30}</b> placements` : "Today's challenge awaits";
-    $('homeStreak').innerHTML = sk.current > 0 ? `Current streak <b>${sk.current} day${sk.current === 1 ? '' : 's'}</b>` : sk.longest > 0 ? `Longest streak <b>${sk.longest}</b>` : '';
+    const bestDaily = Math.max(sk.best, this.stats.bestDaily);
+    $('homeDaily').innerHTML = day?.completed ? `Completed · Best <b>${fmt(day.best)}</b>`
+      : saved ? `In progress · <b>${saved.state.stats.moves} of ${saved.state.daily?.limit ?? 30}</b> placements`
+      : bestDaily > 0 ? `Ready to play · Best <b>${fmt(bestDaily)}</b>` : 'Ready to play';
+    const streakText = sk.current > 0 ? `Streak <b>${sk.current} day${sk.current === 1 ? '' : 's'}</b>` : sk.longest > 0 ? `Longest streak <b>${sk.longest}</b>` : 'Start a streak today';
+    $('homeStreak').innerHTML = day?.completed ? `${streakText} · Next at ${this.resetClock()}` : streakText;
     $('btnDaily').classList.toggle('done', !!day?.completed);
     this.applyMaterial(s.highestLevel);
     this.flushGameCenter();
+  }
+
+  /**
+   * Build 10: credits achievements the saved career already proves (Daily completions from the Daily records, levels,
+   * Overdrive use), once, quietly at launch. Unlocks are stored with their time, so nothing is ever granted twice.
+   */
+  private creditEarlier() {
+    const sk = streaks(this.daily, this.today());
+    const synced = syncDaily(this.stats, { completed: sk.completed, current: sk.current, longest: sk.longest, best: sk.best });
+    const g = grantProgress(synced, this.cfg);
+    if (g.stats !== this.stats) { this.stats = g.stats; store(KEYS.stats, JSON.stringify(this.stats)); }
   }
 
   /** Build 1 saves migrate; anything that can't be restored is cleared with an explanation. Records are kept. */
@@ -268,15 +299,14 @@ export class App {
 
   private startClassic(state?: GameState, restore?: { elapsedMs: number; bestAtStart: number }) {
     this.view.animator.finish();
-    this.clearMessages();
+    this.clearNotes();
     this.tutorialIndex = -1;
     this.view.tutorialTarget = null;
     $('tutorial').hidden = true;
     $('btnSkip').hidden = true;
     $('btnGameSettings').hidden = false;
-    $('scores').style.visibility = '';
-    $('status').style.visibility = '';
-    $('levelHud').style.visibility = '';
+    // Build 7: the practice round hides the HUD rows entirely (no reserved blank space); real games restore them.
+    $('game').classList.remove('tut-mode');
     this.session = new GameSession(state ?? this.freshClassic(), this.cfg);
     const daily = this.session.state.mode === 'daily';
     if (!daily) this.dailyRun = null;
@@ -305,6 +335,7 @@ export class App {
     $('chain').classList.remove('on');
     this.updateOverdriveHud();
     this.show('game');
+    if (this.session.state.od && (this.session.state.od.active > 0 || this.session.state.od.charge >= 100)) this.view.warmOverdrive();
     if (!restore) {
       track('game_started', { seed: this.session.state.seed, mode: this.session.state.mode, ruleset: this.session.state.ruleset ?? 2, rotationMode: this.cfg.rotation.mode, gameInSession: this.gamesThisSession + 1 });
       // Played again within 10 s of a result: an immediate replay.
@@ -319,6 +350,17 @@ export class App {
     const st = newGame(newSeed(), this.cfg, { ruleset: this.dev.ruleset === 1 ? 1 : undefined });
     return this.devEnabled ? { ...st, dev: true } : st;
   }
+
+  /** Build 10: day shift from a shared challenge id to the local date it is shown as (see labelShift). */
+  private dayShift(): number { return labelShift(new Date().getTimezoneOffset()); }
+  /** The local date a challenge is shown as. */
+  private labelOf(id: string): string { return addDays(id, this.dayShift()); }
+  /** The challenge's local date in words. */
+  private dailyDate(id: string, year = true): string { return dayLabel(this.labelOf(id), year); }
+  /** True while the current challenge is labelled with today's local date ("today" reads naturally). */
+  private dailyIsLocalToday(): boolean { return this.labelOf(this.today()) === localDateId(); }
+  /** The shared reset as a local clock time, e.g. "7:00 PM". */
+  private resetClock(): string { return new Date(Date.now() + this.msToNext()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
 
   /** Today's challenge id (UTC). The developer menu can simulate another day. */
   private today(): string {
@@ -348,29 +390,93 @@ export class App {
   private openDailyHub() {
     const id = this.today();
     const [y, m] = id.split('-').map(Number);
-    if (!this.calMonth.y) this.calMonth = { y, m };
+    const [ly, lm] = this.labelOf(id).split('-').map(Number);
+    if (!this.calMonth.y) this.calMonth = { y: ly, m: lm };
+    void y; void m;
     this.renderDailyHub();
     this.openOverlay('dailyHub');
     this.wake();
   }
+
+  /**
+   * Build 5 Daily landing: play first. Date, a little art, the one-line rules, the primary action, three compact
+   * figures, this week's strip and the countdown, all inside the safe area with no scrolling. Everything else
+   * (the month calendar and detailed records) lives on the history screen.
+   */
+  private previewDay: { id: string; cells: ({ pulse?: boolean } | null)[] } | null = null;
+
+  private dhTimer = 0;
 
   private renderDailyHub() {
     const id = this.today();
     const day = this.daily.days[id];
     const st = streaks(this.daily, id);
     const saved = this.dailySave();
-    $('dhDate').textContent = dayLabel(id);
-    $('dhStatus').innerHTML = day?.completed
-      ? `Completed · today's best <b>${fmt(day.best)}</b>`
-      : saved ? `In progress · ${saved.state.stats.moves} of ${saved.state.daily?.limit ?? 30} placements` : "Today's challenge awaits";
+    const limit = this.dev.dailyLimit || this.cfg.daily.placementLimit;
+    const localToday = this.dailyIsLocalToday();
+    $('dhDate').textContent = localToday ? this.dailyDate(id) : `Current challenge · ${this.dailyDate(id)}`;
+    $('dhLead').innerHTML = saved ? `Challenge in progress · <b>${saved.state.stats.moves} of ${saved.state.daily?.limit ?? limit}</b> moves`
+      : day?.completed ? `Completed · best <b>${fmt(day.best)}</b>` : localToday ? 'Today&rsquo;s puzzle awaits' : 'Current challenge awaits';
+    $('dhRules').textContent = `${limit} moves · Same puzzle for everyone · No timer`;
+    $('btnDailyStart').textContent = saved ? 'CONTINUE CHALLENGE' : day?.completed ? 'PLAY AGAIN' : 'START CHALLENGE';
+    const best = Math.max(st.best, this.stats.bestDaily);
+    const stat = (v: string, k: string, cls = '') => `<div class="dl-stat ${cls}"><b>${v}</b><span>${k}</span></div>`;
+    $('dhStats').innerHTML = stat(`${st.current}`, st.current === 1 ? 'day streak' : 'day streak', 'streak')
+      + stat(`${st.completed}`, 'completed') + stat(best ? fmt(best) : '–', 'best daily');
+    const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    // Build 10: each box shows its local date; a completed day shows the date and a check; the current challenge
+    // keeps its own outline. Boxes are local dates, each standing for the shared challenge that starts on it.
+    const word = { completed: 'completed', today: 'current challenge, not played yet', missed: 'missed', future: 'upcoming', before: 'before your first challenge' } as const;
+    $('dhWeek').innerHTML = weekStrip(recordsByLabel(this.daily, this.dayShift()), this.labelOf(id)).map((d) =>
+      `<div class="wk ${d.state}${d.isToday ? ' is-today' : ''}" role="listitem" aria-label="${dayLabel(d.id, false)}, ${d.isToday && d.state === 'completed' ? 'current challenge, completed' : word[d.state]}">`
+      + `<span class="wk-dow">${DOW[d.dow]}</span><span class="wk-dot"><b class="wk-num">${d.day}</b>${d.state === 'completed' ? '<i class="wk-check" aria-hidden="true">✓</i>' : ''}</span></div>`).join('');
+    $('dhNext').innerHTML = this.nextLine();
+    // Build 6: the countdown stays live while the screen is open (and the screen refreshes itself at the UTC reset).
+    clearInterval(this.dhTimer);
+    this.dhTimer = window.setInterval(() => {
+      if (this.overlay !== 'dailyHub') { clearInterval(this.dhTimer); return; }
+      if (this.today() !== id) { this.renderDailyHub(); return; }
+      $('dhNext').innerHTML = this.nextLine();
+    }, 20000);
+    // Completion animation: today's mark pops the first time this screen shows it completed.
+    if (day?.completed && load('bloq.dailyPop') !== id) {
+      store('bloq.dailyPop', id);
+      document.querySelector('#dhWeek .wk.is-today')?.classList.add('just-done');
+    }
+    // Build 6: today's actual starting board (generated once per day, the same puzzle the Start button plays).
+    if (this.previewDay?.id !== id) {
+      const cfg = { ...this.cfg, daily: { ...this.cfg.daily, placementLimit: limit } };
+      this.previewDay = { id, cells: dailyChallenge(id, cfg).board.cells };
+    }
+    const cells = this.previewDay.cells;
+    requestAnimationFrame(() => { if (this.overlay === 'dailyHub') paintDailyPreview($<HTMLCanvasElement>('dhArt'), cells); });
+  }
+
+  /** Countdown to the shared reset, with its local clock time. */
+  private nextLine(): string { return `Next challenge at ${this.resetClock()} · in <b>${fmtCountdown(this.msToNext())}</b>`; }
+
+  /** The secondary screen: full month calendar, detailed streak figures and personal records. Scrolls if needed. */
+  private openDailyHistory() {
+    this.renderDailyHistory();
+    this.openOverlay('dailyHistory');
+  }
+
+  private renderDailyHistory() {
+    const id = this.today();
+    const day = this.daily.days[id];
+    const st = streaks(this.daily, id);
     const rows: [string, string][] = [
-      ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`], ['Completed', `${st.completed}`],
-      ['This month', `${st.thisMonth}`], ['Best daily', st.best ? fmt(st.best) : '–'], ['Today', day?.completed ? fmt(day.best) : '–'],
+      ['Current streak', `${st.current}`], ['Longest streak', `${Math.max(st.longest, this.stats.longestStreak)}`],
+      ['Completed', `${st.completed}`], ['This month', `${st.thisMonth}`],
+      ['Best daily', st.best || this.stats.bestDaily ? fmt(Math.max(st.best, this.stats.bestDaily)) : '–'], [this.dailyIsLocalToday() ? 'Today\u2019s best' : 'Current challenge best', day?.completed ? fmt(day.best) : '–'],
     ];
-    $('dhStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+    $('dhHistStats').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
     this.renderCalendar();
-    $('dhNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b> (midnight UTC)`;
-    $('btnDailyStart').textContent = saved ? 'CONTINUE' : day?.completed ? 'PLAY AGAIN' : 'START';
+    const recs = bestDays(this.daily, 5);
+    $('dhRecords').innerHTML = recs.length
+      ? recs.map((r, i) => `<li><span class="rk">${i + 1}</span><span class="rd">${this.dailyDate(r.id)}</span><b>${fmt(r.best)}</b></li>`).join('')
+      : '<li class="empty">Complete a Daily Challenge to set your first record.</li>';
+    $('dhNote').textContent = `A new challenge starts every day at ${this.resetClock()} your time, the same moment for every player. Everyone plays the same board and pieces; replays are allowed and your first and best scores are both kept.`;
   }
 
   private msToNext() {
@@ -379,14 +485,14 @@ export class App {
   }
 
   private renderCalendar() {
-    const today = this.today();
+    const today = this.labelOf(this.today());
     const { y, m } = this.calMonth;
-    const cal = monthCalendar(this.daily, today, y, m);
+    const cal = monthCalendar(recordsByLabel(this.daily, this.dayShift()), today, y, m);
     $('calMonth').textContent = `${MONTHS[m - 1]} ${y}`;
     const dows = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((d) => `<span class="dow">${d}</span>`).join('');
-    const label = { completed: 'completed', today: 'today', missed: 'not played', future: 'upcoming', before: '' } as const;
+    const label = { completed: 'completed', today: 'current challenge', missed: 'not played', future: 'upcoming', before: '' } as const;
     $('calGrid').innerHTML = dows + '<span></span>'.repeat(cal.leading) + cal.days.map((d) =>
-      `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}</span>`).join('');
+      `<span class="d ${d.state}${d.id === today ? ' today' : ''}" aria-label="${dayLabel(d.id, false)}${label[d.state] ? `, ${label[d.state]}` : ''}">${d.day}${d.state === 'completed' ? '<i aria-hidden="true">✓</i>' : ''}</span>`).join('');
     const [ty, tm] = today.split('-').map(Number);
     $<HTMLButtonElement>('calNext').disabled = y > ty || (y === ty && m >= tm);
   }
@@ -422,8 +528,16 @@ export class App {
     if (this.devEnabled) state = { ...state, dev: true };
     track(start.replay ? 'daily_replayed' : 'daily_started', { day: id, attempt: this.dailyRun.attempt });
     this.startClassic(state);
-    this.message('DAILY CHALLENGE', 'daily', [`${dayLabel(id).toUpperCase()} · ${ch.placementLimit} PLACEMENTS`]);
-    this.tip('daily-rules', `Everyone plays this same board and piece order today. Score as much as you can in ${ch.placementLimit} placements.`, 1400);
+    this.callout(`DAILY CHALLENGE · ${ch.placementLimit} PLACEMENTS`, 'daily', 2000);
+    this.tip('daily-rules', `Same board for everyone today. ${ch.placementLimit} placements.`, 2100);
+  }
+
+  /** Build 9: New Classic Run with a saved run asks first. Cancel keeps the run and stays on Home. */
+  private confirmNewRun() {
+    const run = inspectSave(load(KEYS.save), this.cfg).data;
+    if (!run) { this.play(); return; }
+    $('cnText').innerHTML = `Your saved run (<b>${fmt(run.state.score)}</b> points, Level ${run.state.level ?? 1}) will end and its score is recorded as it stands.`;
+    this.openOverlay('confirmNew');
   }
 
   private continueGame() {
@@ -519,6 +633,9 @@ export class App {
       this.grant({ quiet: true });
       this.persist();
     }
+    // Build 9: a level-up celebration from the previous move may still be playing (input stays live through it).
+    // Settle it first so the material below is the real current one.
+    this.view.animator.finish();
     // A level-up in progressive mode may bring a new material: the wave plays after the celebration starts.
     const fromMat = currentMaterial();
     const toMat = tutorial ? fromMat : activeMaterial(this.cfg, this.stats, result.levelAfter);
@@ -530,11 +647,12 @@ export class App {
         const n = r.rows.length + r.cols.length;
         sfx.clear(n, r.combo);
         sfx.comboUp(r.combo);
-        haptic(n >= 3 ? 'big' : n === 2 ? 'multi' : 'clear');
+        haptic(n >= 4 ? 'quad' : n === 3 ? 'big' : n === 2 ? 'multi' : 'clear');
         if (r.shieldRestored) this.animateShield('restore');
         this.displayedScore = tutorial ? 0 : r.scoreAfter;
         this.updateHud();
         this.setCombo(r.combo, true);
+        if (!tutorial) this.affirm(r.rows.length);
         this.celebrate(r, 'lines');
       },
       onWave: (i, wave, r) => {
@@ -545,6 +663,7 @@ export class App {
         if (i === r.waves.length - 1) this.celebrate(r, 'chain');
       },
       onEnergy: (seg) => { sfx.energy(seg); this.refreshRotateButtons(); this.wake(); },
+      onOdMote: () => { sfx.odAbsorb(this.session.state.od?.charge ?? 0); },
       onLevelUp: (r) => this.levelUp(r, fromMat.id !== toMat.id ? this.cfg.materials.find((m) => m.id === toMat.id) ?? null : null),
       onDone: (r) => this.afterResolution(r),
     }, { material: fromMat.id !== toMat.id ? { from: fromMat, to: toMat } : undefined, levelMs: this.dev.levelMs, materialMs: this.dev.materialMs, overdrive: result.odActive });
@@ -553,10 +672,11 @@ export class App {
       this.updateHud();
       this.setCombo(result.combo, false);
       if (result.comboProtected) {
-        this.message('COMBO PROTECTED', 'shieldmsg');
+        // Build 9: the combo indicator itself lights up; the multiplier stays in view.
+        this.flash('combo', 'saved');
         sfx.shield(); haptic('shield');
         this.animateShield('used');
-        this.tip('shield', 'Combo Protection kept your combo alive. Clear a line on your next move or it resets.', 900);
+        this.tip('shield', 'Combo saved! Clear a line next move to keep it.', 900);
       }
     }
     this.updateOverdriveHud();
@@ -571,34 +691,35 @@ export class App {
     setTimeout(() => $('chain').classList.remove('on'), 1000);
     if (this.session.state.mode === 'tutorial') {
       const step = TUTORIAL_STEPS[this.tutorialIndex];
-      if (step?.outro) this.message(step.outro.toUpperCase(), 'big');
+      if (step?.outro) this.callout(step.outro.toUpperCase(), 'big', 1100);
       setTimeout(() => this.nextTutorialStep(), (this.settings.reducedMotion ? 350 : 700) + (step?.outro ? 700 : 0));
       return;
     }
     this.flushProgressNotices();
     if (r.levelAfter === r.levelBefore) this.contextTip(r);
     // Overdrive notices come after the move's own celebration.
+    // Build 9: Overdrive states live on the meter and the HUD chip, never over the board.
     if (r.odReady) {
+      this.view.warmOverdrive();
       sfx.odReady(); haptic('record');
-      this.message('OVERDRIVE READY', 'odready', ['TAP THE METER WHEN YOU WANT IT']);
-      this.tip('od-ready', "Activate Overdrive whenever you're ready. Your next five placements earn double points and free rotations.", 600);
+      this.flash('btnOverdrive', 'ping');
+      this.tip('od-ready', `Overdrive ready: tap the gold meter for ${this.cfg.overdrive.multiplier}× points.`, 600);
     }
     if (r.odEnded) {
       sfx.odEnd(); music.setIntensity(0);
-      this.message('OVERDRIVE COMPLETE', 'odready', [`+${fmt(this.odRunScore)} POINTS IN OVERDRIVE`]);
-    } else if (r.odActive && r.odLeft === 1) {
-      this.message('FINAL OVERDRIVE PLACEMENT', '');
+      this.callout(`OVERDRIVE +${fmt(this.odRunScore)}`, 'od', 1800);
     }
     if (r.odGained > 0 && !r.odReady && !this.firsts.od && r.odChargeAfter >= 10) {
       this.firsts.od = true;
-      this.tip('od-meter', 'Clearing lines and firing Pulses charges Overdrive. Fill the meter to unlock double points.', 700);
+      this.tip('od-meter', 'Clear lines and fire Pulses to charge Overdrive.', 700);
     }
     this.view.odAvailable = r.odAvailable;
     if (r.odAvailable) {
-      this.message('OVERDRIVE AVAILABLE', 'odready', ['ACTIVATE IT TO KEEP PLAYING']);
+      this.hudTip('No moves left. Tap Overdrive to keep playing.', Infinity);
+      this.flash('btnOverdrive', 'ping');
       haptic('invalid');
     }
-    if (r.limitReached) this.message('CHALLENGE COMPLETE', 'daily', [`${r.placementsUsed} OF ${r.placementsUsed} PLACEMENTS`]);
+    if (r.limitReached) this.callout('CHALLENGE COMPLETE', 'daily', 1500);
     this.updateOverdriveHud();
     if (r.gameOver) {
       remove(this.session.state.mode === 'daily' ? KEYS.dailySave : KEYS.save);
@@ -613,13 +734,16 @@ export class App {
   private celebrate(r: MoveResult, phase: 'lines' | 'chain') {
     const lines = r.rows.length + r.cols.length;
     const tutorial = this.session.state.mode === 'tutorial';
-    const out: { t: string; k: string; sub: string[] }[] = [];
-    const add = (t: string, k = '', sub: string[] = []) => out.push({ t, k, sub });
+    const out: { t: string; k: string }[] = [];
+    const add = (t: string, k = '') => out.push({ t, k });
     const mult = this.rules().scoring.comboMultipliers;
     if (phase === 'lines' && r.chain === 0) {
-      if (lines >= 4) add(lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big');
-      else if (lines === 3) add('TRIPLE CLEAR', 'big');
-      else if (lines === 2) add('DOUBLE CLEAR');
+      // Build 10: two or more rows get their affirmation by the score instead (Great! / Excellent! / Amazing!).
+      if (tutorial || r.rows.length < 2) {
+        if (lines >= 4) add(lines >= 5 ? 'MEGA CLEAR' : 'QUAD CLEAR', 'big');
+        else if (lines === 3) add('TRIPLE CLEAR', 'big');
+        else if (lines === 2) add('DOUBLE CLEAR');
+      }
       // Top multiplier reached (and every move it holds there): 3.0× with the default table.
       if (r.combo === mult.length) add('MASSIVE COMBO ×' + Math.max(...mult).toFixed(1), 'big');
       else if (lines < 2 && r.combo >= 3) add('GREAT MOVE');
@@ -635,18 +759,21 @@ export class App {
       // Perfect Board Clear: one combined celebration that leads, with its bonus.
       if (r.perfect) {
         const bonus = Math.round(this.rules().scoring.perfectClear * r.points.multiplier * r.points.overdrive);
-        out.unshift({ t: 'PERFECT CLEAR', k: 'perfect', sub: bonus > 0 ? [`+${fmt(bonus)} BONUS`] : [] });
+        out.unshift({ t: bonus > 0 ? `PERFECT CLEAR +${fmt(bonus)}` : 'PERFECT CLEAR', k: 'perfect' });
         setTimeout(() => { sfx.perfect(); haptic('perfect'); }, 250);
-        this.tip('perfect', 'Perfect Clear! Emptying the whole board earns a big bonus.', 1800);
+        this.tip('perfect', 'Perfect Clear! An empty board earns a big bonus.', 1800);
       }
       if (!this.celebratedBest && this.bestAtStart > 0 && r.scoreAfter > this.bestAtStart) {
         this.celebratedBest = true;
         add(this.session.state.mode === 'daily' ? 'NEW DAILY BEST' : 'NEW PERSONAL BEST', 'record');
       }
-      // In Overdrive the move's points were multiplied: say so on its lead message.
-      if (r.odActive && out.length) out[0].sub.push(`${this.cfg.overdrive.multiplier}× OVERDRIVE POINTS`);
     }
-    for (const m of out) this.message(m.t, m.k, m.sub);
+    // Build 9: everything one move earned shares one line in the HUD slot (the Overdrive chip already shows 2×).
+    if (!out.length) return;
+    const rank = ['', 'big', 'unlock', 'record', 'perfect'];
+    const kind = out.reduce((k, m) => (rank.indexOf(m.k) > rank.indexOf(k) ? m.k : k), '');
+    if (out.some((m) => m.k === 'record')) { sfx.record(); haptic('record'); }
+    this.callout(out.map((m) => m.t).join(' · '), kind, out.length > 1 ? 1900 : 1400);
   }
 
   // ---------------------------------------------------------------- Build 3 progression
@@ -655,6 +782,7 @@ export class App {
   private applyMaterial(level: number) {
     const m = activeMaterial(this.cfg, this.stats, level);
     setMaterial(m);
+    if (this.screen === 'game') this.view.warmOverdrive();
     this.materialCss(m);
   }
 
@@ -686,43 +814,41 @@ export class App {
     const { materials, achievements } = this.pendingNotices;
     this.pendingNotices = { materials: [], achievements: [] };
     for (const m of materials) {
-      this.message('NEW MATERIAL UNLOCKED', 'unlock', [m.name.toUpperCase()]);
+      this.callout(`NEW MATERIAL · ${m.name.toUpperCase()}`, 'unlock', 2000);
       sfx.unlock(); haptic('unlock');
     }
     if (achievements.length) {
       const n = achievements.length;
       const text = n === 1 ? `Achievement: ${achievements[0].name}` : n === 2 ? `Achievements: ${achievements[0].name} and ${achievements[1].name}`
         : `${n} achievements: ${achievements[0].name}, ${achievements[1].name} and ${n - 2} more`;
-      // Wait for a showing banner (level-up, unlock) so the toast never covers it.
-      const busy = this.messageTimer !== null || this.messageQueue.length > 0;
-      setTimeout(() => { this.toast(text, 'achv'); sfx.achievement(); }, materials.length ? 900 : busy ? 1400 : 0);
+      // In a game it waits its turn in the HUD slot; elsewhere (results, menus) it is a toast.
+      if (this.screen === 'game' && !this.overlay) this.queueNote(text.toUpperCase(), 'achv', 2200);
+      else this.toast(text, 'achv');
+      sfx.achievement();
     }
-    if (materials.length) this.tip('unlock', 'Unlocked materials stay yours. Choose one any time in Materials.', 2600);
+    if (materials.length) this.tip('unlock', 'Unlocked materials stay yours. See Materials.', 2600);
   }
 
   /** One consolidated celebration, however many levels this move gained. */
   private levelUp(r: MoveResult, newMaterial: MaterialDef | null) {
+    // Build 9: the level row in the score area is the celebration: new number and rank, a short gold highlight,
+    // and the bar restarting toward the next level. Nothing covers the board, and input stays live.
     this.displayedLevel = r.levelAfter;
     this.updateLevelHud();
-    const el = $('levelHud');
-    el.classList.remove('up'); void el.offsetWidth; el.classList.add('up');
-    const gained = r.levelAfter - r.levelBefore;
-    const P = this.rules().progression;
-    const sub = [`LEVEL ${r.levelAfter} — ${levelTitle(P, r.levelAfter).toUpperCase()}`];
-    if (r.levelEnergy > 0) sub.push(this.cfg.progression.levelUpEnergy === 'full' ? 'ROTATION ENERGY RESTORED' : `+${r.levelEnergy} ROTATION ENERGY`);
-    // A permanent unlock earned by this level-up joins the one celebration instead of a separate banner.
+    this.flash('levelHud', 'up');
+    // A permanent unlock earned by this level-up gets the HUD slot (the material wave shows it on the board).
     const unlocked = this.pendingNotices.materials.splice(0);
-    for (const m of unlocked) sub.push(`NEW MATERIAL UNLOCKED: ${m.name.toUpperCase()}`);
-    sub.push(`NEXT: ${fmt(levelThreshold(P, r.levelAfter + 1))} FOR LEVEL ${r.levelAfter + 1}`);
-    if (unlocked.length) { setTimeout(() => { sfx.unlock(); haptic('unlock'); }, 600); this.tip('unlock', 'Unlocked materials stay yours. Choose one any time in Materials.', 6500); }
-    this.clearMessages();
-    this.message(gained > 1 ? `LEVEL UP ×${gained}` : 'LEVEL UP', 'lvlup', sub);
+    if (unlocked.length) {
+      this.callout(`NEW MATERIAL · ${unlocked.map((m) => m.name.toUpperCase()).join(' · ')}`, 'unlock', 2000);
+      setTimeout(() => { sfx.unlock(); haptic('unlock'); }, 600);
+      this.tip('unlock', 'Unlocked materials stay yours. See Materials.', 4000);
+    }
     sfx.levelUp(); haptic('levelup');
     if (r.levelEnergy > 0) setTimeout(() => sfx.recharge(), 420);
     if (newMaterial) { this.materialCss(newMaterial); setTimeout(() => sfx.materialSweep(), 320); track('material_tier_reached', { material: newMaterial.id, level: r.levelAfter }); }
     // Contextual teaching for the first level-up and the first material change.
-    if (newMaterial && this.tip('material', `New material: ${newMaterial.name}. Colour shows your progress; it never needs matching.`, 2100)) return;
-    this.tip('levelup', 'Level up! Your energy refills and new pieces get a little tougher.', 2100);
+    if (newMaterial && this.tip('material', `New material: ${newMaterial.name}. No matching needed.`, 2100)) return;
+    this.tip('levelup', 'Level up! Energy refills; pieces get tougher.', 1200);
   }
 
   /** Shows a one-time contextual tip (saved so it never repeats). Returns whether it showed. */
@@ -730,24 +856,23 @@ export class App {
     if (this.session.state.mode === 'tutorial' || this.stats.tipsSeen.includes(id)) return false;
     this.stats = { ...this.stats, tipsSeen: [...this.stats.tipsSeen, id] };
     store(KEYS.stats, JSON.stringify(this.stats));
-    // Tips wait for any showing banner so they never cover a celebration.
-    const show = (tries: number) => {
+    // Build 9: tips use the dismissible line in the top bar, outside the board and tray.
+    const show = () => {
       // The game ended meanwhile: keep the tip for another time rather than covering the results.
       if (this.overlay || this.screen !== 'game') {
         this.stats = { ...this.stats, tipsSeen: this.stats.tipsSeen.filter((t) => t !== id) };
         store(KEYS.stats, JSON.stringify(this.stats));
         return;
       }
-      if (tries > 0 && (this.messageTimer !== null || this.messageQueue.length > 0)) setTimeout(() => show(tries - 1), 350);
-      else this.toast(text, 'tip');
+      this.hudTip(text);
     };
-    setTimeout(() => show(12), delay);
+    setTimeout(() => show(), delay);
     return true;
   }
 
   /** After the first line ever: explain the level bar. */
   private contextTip(r: MoveResult) {
-    if (this.session.state.mode === 'classic' && r.rows.length + r.cols.length > 0) this.tip('progress', `Points fill the level bar. Reach ${fmt(levelProgress(this.rules().progression, r.scoreAfter).next)} for Level 2.`);
+    if (this.session.state.mode === 'classic' && r.rows.length + r.cols.length > 0) this.tip('progress', `Points fill the level bar. ${fmt(levelProgress(this.rules().progression, r.scoreAfter).next)} for Level 2.`, 400);
   }
 
   /** Level row: title, score against the next threshold, a bar relative to this level's own start. */
@@ -757,7 +882,7 @@ export class App {
       // Daily: the bar shows placements used of the limit; no levels.
       const used = st.stats.moves, limit = st.daily.limit;
       $('levelNum').textContent = 'DAILY';
-      $('levelTitle').textContent = dayLabel(st.daily.id, false).toUpperCase();
+      $('levelTitle').textContent = this.dailyDate(st.daily.id, false).toUpperCase();
       $('levelPts').innerHTML = `<b>${used}</b> / ${limit} placements`;
       $('levelLeft').textContent = used >= limit ? 'COMPLETE' : `${limit - used} left`;
       $<HTMLElement>('levelFill').style.width = `${((used / limit) * 100).toFixed(1)}%`;
@@ -801,6 +926,39 @@ export class App {
     this.gameOver();
   }
 
+  /**
+   * Build 6 results: the score counts up (ease-out, about 0.9 s; instant with reduced motion). A new record gets the
+   * gold treatment and a short burst of crystal sparks around the number.
+   */
+  private countUp(el: HTMLElement, to: number, record: boolean) {
+    const sheet = el.closest('.sheet');
+    sheet?.classList.toggle('is-record', record);
+    sheet?.querySelectorAll('.res-spark').forEach((n) => n.remove());
+    if (this.settings.reducedMotion || to <= 0) { el.textContent = fmt(to); return; }
+    const t0 = performance.now(), dur = Math.min(1100, 500 + to / 60);
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur), e = 1 - Math.pow(1 - p, 3);
+      el.textContent = fmt(Math.round(to * e));
+      if (p < 1) requestAnimationFrame(step);
+      else if (record) {
+        el.classList.remove('landed'); void el.offsetWidth; el.classList.add('landed');
+        const host = el.parentElement!;
+        for (let i = 0; i < (this.settings.reducedEffects ? 8 : 18); i++) {
+          const sp = document.createElement('i');
+          sp.className = 'res-spark';
+          const a = (i / 18) * Math.PI * 2 + Math.random() * 0.3, d = 50 + Math.random() * 60;
+          sp.style.setProperty('--dx', `${Math.cos(a) * d}px`); sp.style.setProperty('--dy', `${Math.sin(a) * d * 0.6}px`);
+          sp.style.left = `${el.offsetLeft + el.offsetWidth / 2}px`; sp.style.top = `${el.offsetTop + el.offsetHeight / 2}px`;
+          sp.style.animationDelay = `${Math.random() * 80}ms`;
+          host.appendChild(sp);
+          setTimeout(() => sp.remove(), 1000);
+        }
+      }
+    };
+    el.textContent = '0';
+    requestAnimationFrame(step);
+  }
+
   private gameOver() {
     const st = this.session.state;
     const prevBest = this.bestAtStart;
@@ -823,9 +981,7 @@ export class App {
       levelRecord && ['NEW LEVEL RECORD', ''],
       (st.stats.maxChain >= 4 || this.earned.chainRecord) && ['MASSIVE CHAIN REACTION', ''],
       st.stats.perfectClears > 0 && [st.stats.perfectClears > 1 ? `PERFECT CLEAR ×${st.stats.perfectClears}` : 'PERFECT CLEAR', ''],
-      this.earned.materials.length > 0 && [`${this.earned.materials[this.earned.materials.length - 1].name.toUpperCase()} UNLOCKED`, 'mat'],
       (st.stats.odActivations >= 2 || st.stats.odBestScore >= 5000) && ['OVERDRIVE MASTER', ''],
-      this.earned.achievements.length > 0 && [`NEW ACHIEVEMENT · ${this.earned.achievements[0].name.toUpperCase()}`, ''],
     ];
     const top = (candidates.filter(Boolean) as [string, string][]).find(([t]) => t !== kicker) ?? null;
     $('resAcc').innerHTML = top ? `<li class="${[top[1], 'top'].join(' ').trim()}">${top[0]}</li>` : '';
@@ -835,9 +991,25 @@ export class App {
     $('resLevel').innerHTML = `LEVEL <b>${level}</b> — <b>${title.toUpperCase()}</b>${legacy ? ' · BUILD 3 RULES' : ''}`;
     $('resLvl').textContent = String(level);
     $('resLvlBest').textContent = String(this.stats.highestLevel);
+    // Build 10: a material unlocked this run is celebrated here; otherwise the next one to aim for.
+    const unlocked = this.earned.materials[this.earned.materials.length - 1];
+    $('resUnlock').hidden = !unlocked;
+    if (unlocked) {
+      $('resUnlockName').textContent = `${unlocked.name.toUpperCase()}${this.earned.materials.length > 1 ? ` +${this.earned.materials.length - 1} MORE` : ''}`;
+      requestAnimationFrame(() => paintMaterialSwatch($<HTMLCanvasElement>('resUnlockSwatch'), unlocked, false));
+    }
+    // Newly earned achievements: the most meaningful leads; the rest wait in Achievements.
+    const achs = [...this.earned.achievements].sort((a, b) => achievementWeight(b) - achievementWeight(a));
+    $('resAch').hidden = !achs.length;
+    if (achs.length) {
+      $('resAchIco').innerHTML = ACH_ICONS[achs[0].icon];
+      $('resAchName').textContent = achs[0].name;
+      $('resAchMore').textContent = achs.length > 1 ? `+${achs.length - 1} more in Achievements` : achs[0].description;
+    }
+    const nm = nextMaterial(this.stats, this.cfg);
     const dailyDone = !!this.daily.days[this.today()]?.completed;
-    const next = !dailyDone ? "Complete today's Daily Challenge" : nextMilestone(this.stats, this.cfg) ?? `Beat your personal best of ${fmt(this.stats.bestScore)}`;
-    $('resNext').innerHTML = `Next: <b>${next}</b>`;
+    $('resNext').innerHTML = nm ? `Next unlock · <b>${nm.name} at Level ${nm.minLevel}</b>`
+      : `Next: <b>${!dailyDone ? 'Complete the current Daily Challenge' : nextMilestone(this.stats, this.cfg) ?? `Beat your personal best of ${fmt(this.stats.bestScore)}`}</b>`;
     const mat = activeMaterial(this.cfg, this.stats, level);
     const message = this.earned.chainRecord && st.stats.maxChain >= 3 ? 'Can you trigger a bigger chain reaction?'
       : level >= 3 && (levelRecord || level >= 6) ? `I reached Level ${level} in BLOQ.`
@@ -845,7 +1017,7 @@ export class App {
     this.lastResultInfo = { score: st.score, best: legacy ? this.stats.legacyBestScore : this.stats.bestScore, combo: st.stats.maxCombo, chain: st.stats.maxChain, lines: st.stats.linesCleared, newRecord, level, title, material: mat, message, overdrives: st.stats.odActivations };
     $('resKicker').textContent = kicker;
     $('resKicker').classList.toggle('record', kicker !== 'GAME OVER');
-    $('resScore').textContent = fmt(st.score);
+    this.countUp($('resScore'), st.score, newRecord);
     const bestNow = legacy ? this.stats.legacyBestScore : this.stats.bestScore;
     $('resBest').textContent = newRecord ? (prevBest > 0 ? `Previous best ${fmt(prevBest)}` : 'Your first record') : `Personal best ${fmt(bestNow)}${legacy ? ' (Build 3 rules)' : ''}`;
     $('resLines').textContent = fmt(st.stats.linesCleared);
@@ -884,9 +1056,9 @@ export class App {
     sfx.gameOver(); haptic(up.newBest ? 'record' : 'clear');
     if (up.newBest && up.previousBest > 0) setTimeout(() => sfx.record(), 500);
     $('drKicker').textContent = up.newBest && up.previousBest > 0 ? 'NEW DAILY BEST' : summary.fullRun ? 'DAILY CHALLENGE COMPLETE' : 'NO MOVES LEFT';
-    $('drDate').textContent = `${dayLabel(id)} (UTC)`;
-    $('drScore').textContent = fmt(st.score);
-    $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Today's best ${fmt(day.best)}`;
+    $('drDate').textContent = this.dailyDate(id);
+    this.countUp($('drScore'), st.score, false);
+    $('drBest').textContent = up.newBest && up.previousBest > 0 ? `Previous best ${fmt(up.previousBest)}` : `Best ${fmt(day.best)}`;
     $('drFirst').textContent = day.first !== null && (run.attempt > 1 || !up.firstCompletion) ? `First attempt ${fmt(day.first)} · attempt ${run.attempt}` : 'First attempt';
     $('drPlaced').textContent = `${st.stats.moves}/${st.daily!.limit}`;
     $('drLines').textContent = fmt(st.stats.linesCleared);
@@ -898,7 +1070,8 @@ export class App {
     $('drStreak').textContent = `${sk.current} day${sk.current === 1 ? '' : 's'}`;
     $('drRank').textContent = '–';
     $('drNext').innerHTML = `Next challenge in <b>${fmtCountdown(this.msToNext())}</b>`;
-    this.lastDailyInfo = { day: id, score: st.score, rank: null, streak: sk.current, message: up.newBest && up.previousBest > 0 ? 'Can you beat my daily score?' : "Today's BLOQ challenge is complete.", material: currentMaterial() };
+    // The share card shows the challenge's local date.
+    this.lastDailyInfo = { day: this.labelOf(id), score: st.score, rank: null, streak: sk.current, message: up.newBest && up.previousBest > 0 ? 'Can you beat my daily score?' : "Today's BLOQ challenge is complete.", material: currentMaterial() };
     this.view.fade = 1;
     $('toast').classList.remove('on');
     this.openOverlay('dailyResults');
@@ -955,7 +1128,7 @@ export class App {
       const rows: [string, string][] = key === 'classic' ? [['Personal best', fmt(s.bestScore)], ...(s.legacyBestScore ? [['Build 3 rules best', fmt(s.legacyBestScore)] as [string, string]] : [])]
         : key === 'level' ? [['Highest level', `${s.highestLevel} · ${levelTitle(this.cfg.progression, s.highestLevel)}`]]
         : key === 'chain' ? [['Largest chain', s.maxChain ? `×${s.maxChain}` : '–'], ['Largest in Overdrive', s.odMaxChain ? `×${s.odMaxChain}` : '–']]
-        : [["Today's best", this.daily.days[today]?.completed ? fmt(this.daily.days[today].best) : 'Not played yet'], ...days.map(([id, d]) => [dayLabel(id), fmt(d.best)] as [string, string])];
+        : [[this.dailyIsLocalToday() ? "Today's best" : 'Current challenge best', this.daily.days[today]?.completed ? fmt(this.daily.days[today].best) : 'Not played yet'], ...days.map(([id, d]) => [this.dailyDate(id), fmt(d.best)] as [string, string])];
       return rows.map(([k, v], i) => `<li class="${i === 0 ? 'me' : ''}"><span class="rk">${i === 0 ? '★' : ''}</span><span>${k}</span><span class="sc">${v}</span></li>`).join('');
     };
     $('rankList').innerHTML = personal();
@@ -982,7 +1155,7 @@ export class App {
     if (!st) {
       if (this.session.lastRejection === 'not-charged') {
         this.view.odPulse = performance.now();
-        if (!this.tip('od-meter', 'Clearing lines and firing Pulses charges Overdrive. Fill the meter to unlock double points.')) this.toast(`Overdrive ${Math.floor(st0.od?.charge ?? 0)}% charged`);
+        if (!this.tip('od-meter', 'Clear lines and fire Pulses to charge Overdrive.')) this.callout(`OVERDRIVE ${Math.floor(st0.od?.charge ?? 0)}% CHARGED`, '', 1400);
         this.wake();
       }
       return;
@@ -993,8 +1166,9 @@ export class App {
     this.view.animator.reduced = this.settings.reducedMotion;
     this.view.animator.overdrive(performance.now());
     sfx.odActivate(); haptic('overdrive'); music.setIntensity(1);
-    this.clearMessages();
-    this.message('OVERDRIVE ACTIVE', 'od', [`${O.multiplier}× POINTS${this.odBenefit() ? ` · ${this.odBenefit()}` : ''}`, `${O.duration} PLACEMENTS`]);
+    // Build 9: the gold frame and the live HUD chip (2× POINTS · 5 LEFT) announce it; the board stays clear.
+    if (this.noteTip?.left === Infinity) this.dismissTip();
+    this.tip('od-active', `Overdrive: ${O.multiplier}× points${this.odBenefit() ? ` and ${this.odBenefit().toLowerCase()}` : ''}, ${O.duration} moves.`, 300);
     this.stats = recordOverdriveActivation(this.stats);
     this.grant();
     this.persist();
@@ -1016,6 +1190,7 @@ export class App {
     const od = st.od;
     const hud = $('odHud');
     const active = !!od && od.active > 0 && st.mode !== 'tutorial';
+    if (active && hud.hidden) requestAnimationFrame(() => this.flash('odHud', 'in'));
     hud.hidden = !active;
     document.getElementById('app')?.classList.toggle('od', active);
     if (active) {
@@ -1068,13 +1243,11 @@ export class App {
   private startTutorial() {
     track('tutorial_started');
     this.view.animator.finish();
-    this.clearMessages();
+    this.clearNotes();
     this.tutorialIndex = -1;
     $('btnSkip').hidden = false;
     $('btnGameSettings').hidden = true;
-    $('scores').style.visibility = 'hidden';
-    $('status').style.visibility = 'hidden';
-    $('levelHud').style.visibility = 'hidden';
+    $('game').classList.add('tut-mode');
     setMaterial(this.cfg.materials[0]);
     this.displayedScore = 0;
     this.updateHud(true);
@@ -1104,7 +1277,7 @@ export class App {
     store(KEYS.tutorialDone, '1');
     track(skipped ? 'tutorial_skipped' : 'tutorial_completed');
     this.startClassic();
-    if (!skipped) this.message("YOU'RE READY", 'big');
+    if (!skipped) this.callout("YOU'RE READY", 'big', 1400);
   }
 
   // ---------------------------------------------------------------- HUD
@@ -1166,37 +1339,105 @@ export class App {
     el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump');
   }
 
-  /** Messages queue so two never overwrite each other. */
-  private message(text: string, kind = '', sub: string[] = []) {
-    this.messageQueue.push({ text, kind, sub });
-    if (!this.messageTimer) this.nextMessage();
-  }
-
-  private clearMessages() {
-    this.messageQueue = [];
-    if (this.messageTimer) clearTimeout(this.messageTimer);
-    this.messageTimer = null;
-    $('message').className = 'message';
-  }
-
-  private nextMessage() {
-    const el = $('message');
-    const m = this.messageQueue.shift();
-    if (!m) { el.className = 'message'; this.messageTimer = null; return; }
-    el.textContent = m.text;
-    for (const line of m.sub) {
-      const sm = document.createElement('small'); sm.textContent = line;
-      sm.className = line.startsWith('NEW MATERIAL') ? 'u' : line.startsWith('NEXT') ? 'n' : line.includes('ENERGY') ? 'e' : '';
-      el.appendChild(sm);
-    }
-    el.className = 'message';
+  /**
+   * Build 10: one short affirmation by the score for rows cleared by a single placement (columns keep their own
+   * feedback). Fixed in place, it never moves the HUD; a new qualifying clear replaces one still showing.
+   */
+  private affirm(rows: number) {
+    if (rows < 2) return;
+    const el = $('affirm');
+    const [text, kind] = rows >= 4 ? ['Amazing!', 'amazing'] : rows === 3 ? ['Excellent!', 'excellent'] : ['Great!', 'great'];
+    // Build 11: a ribbon sweeps across the middle of the board. It ignores touches, so play continues underneath.
+    const L = this.view.layout;
+    if (L) el.style.top = `${L.by + L.boardPx / 2}px`;
+    $('affirmText').textContent = text;
+    el.className = 'affirm';
     void el.offsetWidth;
-    el.className = `message on ${m.kind}`;
-    if (m.kind === 'record') { sfx.record(); haptic('record'); }
-    this.messageTimer = setTimeout(() => {
-      el.className = `message ${m.kind}`;
-      this.messageTimer = setTimeout(() => this.nextMessage(), 180);
-    }, m.kind === 'lvlup' ? (m.sub.length > 3 ? 1900 : 1500) : m.kind ? 1150 : 900);
+    el.className = `affirm on ${kind}`;
+    clearTimeout(this.affirmTimer);
+    this.affirmTimer = window.setTimeout(() => { el.className = 'affirm'; }, 1450);
+  }
+  private affirmTimer = 0;
+
+  /** Restarts a short CSS highlight on an element (class removed and re-added). */
+  private flash(id: string, cls: string) {
+    const el = $(id);
+    el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls);
+  }
+
+  /**
+   * Build 9 HUD note. One fixed slot in the top bar (where the small logo sits) carries a move's callout, queued
+   * notices and first-use tips, so nothing ever covers the board or tray or moves them. A new callout replaces the
+   * current one at once (no backlog of late pop-ups); a tip steps aside for a callout and comes back afterwards.
+   */
+  private callout(text: string, kind = '', ms = 1400) {
+    const now = performance.now();
+    // Two notices from the same instant share one line.
+    if (this.note && now - this.note.at < 150 && this.note.until > now && this.note.text !== text) text = `${this.note.text} · ${text}`;
+    this.pauseTip(now);
+    this.note = { text, kind, at: now, until: now + ms };
+    this.renderNote();
+  }
+
+  /** A notice that waits for the slot (achievements), instead of replacing a move callout. */
+  private queueNote(text: string, kind: string, ms: number) {
+    if (this.note && this.note.until > performance.now()) { this.noteQueue.push({ text, kind, ms }); return; }
+    this.callout(text, kind, ms);
+  }
+
+  /** A short, dismissible line. Shows for about seven seconds of visible time (Infinity: until dismissed). */
+  private hudTip(text: string, ms = 7000) {
+    this.noteTip = { text, left: ms };
+    this.tipShownAt = 0;
+    this.renderNote();
+  }
+
+  private dismissTip() {
+    this.noteTip = null;
+    this.tipShownAt = 0;
+    this.renderNote();
+  }
+
+  private pauseTip(now: number) {
+    if (this.noteTip && this.tipShownAt) { this.noteTip.left -= now - this.tipShownAt; this.tipShownAt = 0; }
+  }
+
+  private clearNotes() {
+    this.note = null; this.noteQueue = []; this.noteTip = null; this.tipShownAt = 0;
+    this.renderNote();
+  }
+
+  private renderNote() {
+    const el = $('hudNote'), txt = $('hudNoteText');
+    if (this.noteTimer) { clearTimeout(this.noteTimer); this.noteTimer = null; }
+    const now = performance.now();
+    if (this.note && this.note.until <= now) this.note = null;
+    if (!this.note && this.noteQueue.length) {
+      const q = this.noteQueue.shift()!;
+      this.note = { text: q.text, kind: q.kind, at: now, until: now + q.ms };
+    }
+    const set = (cls: string, text: string) => {
+      txt.textContent = text;
+      el.className = `hud-note on ${cls}`;
+      el.closest('.nav-top')?.classList.add('noting');
+    };
+    if (this.note) {
+      set(`callout ${this.note.kind}`, this.note.text);
+      this.noteTimer = setTimeout(() => this.renderNote(), this.note.until - now);
+      return;
+    }
+    if (this.noteTip && this.noteTip.left > 0) {
+      set('tip', this.noteTip.text);
+      if (!this.tipShownAt) this.tipShownAt = now;
+      if (Number.isFinite(this.noteTip.left)) {
+        const end = this.tipShownAt + this.noteTip.left;
+        this.noteTimer = setTimeout(() => { if (this.noteTip && performance.now() >= end - 5) this.noteTip = null; this.tipShownAt = 0; this.renderNote(); }, Math.max(0, end - now));
+      }
+      return;
+    }
+    this.noteTip = null;
+    el.className = 'hud-note';
+    el.closest('.nav-top')?.classList.remove('noting');
   }
 
   private toast(text: string, kind = '') {
@@ -1276,12 +1517,15 @@ export class App {
     setHighContrast(s.highContrast);
     this.view.reduced = s.reducedMotion;
     this.view.animator.reduced = s.reducedMotion;
+    this.view.lowFx = s.reducedEffects;
+    this.view.animator.lowFx = s.reducedEffects;
     document.documentElement.classList.toggle('reduced', s.reducedMotion);
     document.documentElement.classList.toggle('contrast', s.highContrast);
     $<HTMLInputElement>('setSound').checked = s.sound;
     $<HTMLInputElement>('setHaptics').checked = s.haptics;
     $<HTMLInputElement>('setMotion').checked = s.reducedMotion;
     $<HTMLInputElement>('setContrast').checked = s.highContrast;
+    $<HTMLInputElement>('setEffects').checked = s.reducedEffects;
     $<HTMLInputElement>('setMusic').checked = s.music;
     $<HTMLInputElement>('setSfxVol').value = String(s.sfxVolume);
     $<HTMLInputElement>('setMusicVol').value = String(s.musicVolume);
@@ -1338,11 +1582,11 @@ export class App {
   private renderAchievements() {
     const s = this.stats;
     let done = 0;
-    $('achList').innerHTML = ACHIEVEMENTS.map((a) => {
+    $('achList').innerHTML = achievementsInOrder().map((a) => {
       const p = achievementProgress(a, s, this.cfg);
       if (p.done) done++;
       const pct = p.done ? 100 : Math.round((p.value / p.target) * 100);
-      const status = p.done ? 'DONE' : a.target > 1 ? `${a.target >= 10000 ? fmt(p.value) : p.value} / ${fmt(a.target)}` : '';
+      const status = p.done ? 'DONE' : a.target > 1 ? `${a.target >= 10000 ? fmt(p.value) : p.value} / ${fmt(a.target)}${a.unit ? ` <small>${a.unit}</small>` : ''}` : '';
       return `<li class="ach${p.done ? ' done' : ''}"><span class="ico">${ACH_ICONS[a.icon]}</span>`
         + `<div><div class="nm">${a.name}</div><div class="ds">${a.description}</div>${p.done ? '' : `<div class="pg"><i style="width:${pct}%"></i></div>`}</div>`
         + `<span class="st">${status}</span></li>`;
@@ -1676,15 +1920,53 @@ export class App {
 
   // ---------------------------------------------------------------- wiring
 
+  /**
+   * Build 5 graphics prototype selector (development builds only; release builds ship one style). Switching only
+   * swaps the block sprites: the game state, score and rules are untouched.
+   */
+  private bindGraphics() {
+    const box = document.getElementById('gfxProto');
+    if (__RELEASE__) { box?.remove(); return; }
+    const apply = (st: BlockStyle) => {
+      setBlockStyle(st);
+      document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.setAttribute('aria-checked', String(b.dataset.gfx === st)));
+      if (this.screen === 'game') this.view.resize();
+      this.wake();
+    };
+    // Build 8: the gemstone style is the default; earlier prototype choices are kept under the old key only.
+    const saved8 = load('bloq.graphics8');
+    apply(saved8 === 'b4' || saved8 === 'b5b' || saved8 === 'b5c' || saved8 === 'b6' || saved8 === 'b8' ? saved8 : 'b8');
+    document.querySelectorAll<HTMLButtonElement>('#gfxProto .seg-btn').forEach((b) => b.addEventListener('click', () => {
+      const st = b.dataset.gfx as BlockStyle;
+      store('bloq.graphics8', st); apply(st); sfx.select();
+      this.toast({ b4: 'Build 4 graphics', b5b: 'Build 5B: anodized metal', b5c: 'Build 5C: crystal-metal hybrid', b6: 'Build 6: energy crystal', b8: 'Build 8: gemstones' }[st]);
+    }));
+  }
+
   private bindUi() {
+    // Build 6: every interface button gives a soft click (game sounds stay separate; respects the sound setting).
+    document.addEventListener('pointerdown', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('button, .btn, .seg button, [role="button"]')) sfx.click();
+    }, { capture: true });
+    this.bindGraphics();
+    // Build 8: decode the gemstone renders once; until they are ready the Build 6 crystals stand in.
+    void preloadGems().then(() => { paintSplash($<HTMLCanvasElement>('splashCanvas')); if (this.screen === 'game') this.view.resize(); this.wake(); });
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());
+    on('btnNewRun', () => this.confirmNewRun());
+    // Build 9: a tip goes away the moment it is tapped (the board and tray never wait on it).
+    $('hudNote').addEventListener('click', () => { if (this.noteTip && !this.note) this.dismissTip(); });
+    on('btnCnKeep', () => { this.closeOverlay(); this.refreshHome(); });
+    on('btnCnReplace', () => { this.closeOverlay(); track('saved_run_replaced'); this.play(); });
     on('btnStats', () => { this.renderStats(); this.statsTab('stats'); this.openOverlay('stats'); });
     on('btnAchievements', () => { this.renderStats(); this.statsTab('ach'); this.openOverlay('stats'); });
     on('btnRankings', () => this.openRankings());
     on('btnDaily', () => this.openDailyHub());
-    on('btnDailyStart', () => this.startDaily());
+    on('btnDailyStart', () => { sfx.select(); haptic('select'); this.startDaily(); });
+    on('btnDailyHistory', () => { sfx.select(); this.openDailyHistory(); });
+    on('dhHistBack', () => { this.renderDailyHub(); this.openOverlay('dailyHub'); });
     on('calPrev', () => this.shiftMonth(-1));
     on('calNext', () => this.shiftMonth(1));
     on('btnOverdrive', () => this.activateOverdrive());
@@ -1723,6 +2005,7 @@ export class App {
     on('btnSkip', () => { this.view.animator.finish(); this.tutorialIndex = -2; this.finishTutorial(true); });
     on('btnAgain', () => { this.closeOverlay(); track('game_restarted'); this.startClassic(); });
     on('btnResHome', () => { this.closeOverlay(); this.show('home'); });
+    on('resAch', () => { this.overlayReturn = 'results'; this.renderStats(); this.statsTab('ach'); this.openOverlay('stats'); });
     on('btnShare', () => this.share());
     on('btnTutorial', () => {
       this.closeOverlay();
@@ -1746,6 +2029,7 @@ export class App {
     toggle('setHaptics', 'haptics');
     toggle('setMotion', 'reducedMotion');
     toggle('setContrast', 'highContrast');
+    toggle('setEffects', 'reducedEffects');
     toggle('setMusic', 'music');
     const vol = (id: string, key: 'sfxVolume' | 'musicVolume') => $<HTMLInputElement>(id).addEventListener('input', (e) => {
       this.settings = { ...this.settings, [key]: Number((e.target as HTMLInputElement).value) };
@@ -1781,7 +2065,7 @@ export class App {
     if (!info) return;
     track('share_selected', { mode: 'daily', day: info.day, message: info.message, rank: info.rank ?? 0 });
     const card = renderDailyShareCard(info);
-    const outcome = await shareImage(card, `I scored ${fmt(info.score)} in today's BLOQ Daily Challenge (${dayLabel(info.day)}). ${info.message}`);
+    const outcome = await shareImage(card, `I scored ${fmt(info.score)} in the BLOQ Daily Challenge for ${dayLabel(info.day)}. ${info.message}`);
     if (outcome === 'downloaded') this.toast('Result image saved');
   }
 

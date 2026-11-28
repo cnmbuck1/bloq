@@ -20,6 +20,24 @@ Build 4, **The Experience Update**, adds scoring ruleset 2 with Perfect Board Cl
 calendar, a Game Center leaderboard layer, 13 more achievements, solid metal block rendering, music and a new
 home, results and share cards. See `docs/BUILD4_REPORT.md`.
 
+Build 5 is at its graphics **approval checkpoint**. It has two block renderers built with Three.js physically
+based materials and rendered once into cached sprites: **5B anodized metal** and **5C crystal-metal hybrid**. A
+selector in Settings (development builds only) switches between them and Build 4. It also has the redesigned Daily
+Challenge landing and history screens. See `docs/BUILD5_PROTOTYPE_REPORT.md`.
+
+Build 6, **Premium Design, Graphic Refinement & Game Feel**, takes the 5C crystal direction further into
+edge-lit **energy crystals** (drawn procedurally in 2D, so no WebGL is needed), a recessed board with a metal
+and glass perimeter, a layered reactor background, a shattering line clear with Overdrive charge that flies into
+the meter, refined sounds, tray pedestals, gold and cyan buttons, today's real puzzle on the Daily screen and an
+animated results screen. Rules, scoring and saves are unchanged. See `docs/BUILD6_REPORT.md`.
+
+Build 7 made the board the hero (about 93% of the width, a compact HUD, a practice round with no blank rows) and
+added a Blender pipeline for pre-rendered crystals (`tools/render/`). Build 8, **Premium Visual Refinement & Game
+Feel**, puts those renders in the game: path-traced **gemstones** (one per material) seated in a machined board
+of tiled compartments, a 95%-width board, a settle-and-glint placement, random glints, line-completion anticipation,
+gem-shard clears with graduated rewards, a crystalline cascade sound, graduated haptics and a gemstone energy core
+on the main menu. Rules, scoring and saves are unchanged. See `docs/BUILD8_REPORT.md`.
+
 ## Run it
 
 ```sh
@@ -35,10 +53,17 @@ npm run simulate       # balancing bot: 300 games per rotation mode, writes sim-
 
 ### iPhone
 
-Needs a Mac with Xcode.
+The Xcode project is committed in `ios/` (Capacitor 8, Swift Package Manager, iPhone only, portrait). The
+Game Center plugin lives in `ios/App/App/GameCenterPlugin.swift` and is registered by
+`BloqBridgeViewController`.
+
+**TestFlight without a Mac**: `.github/workflows/testflight.yml` runs on GitHub's macOS runners. It builds the
+release bundle, archives with Xcode cloud signing and uploads to App Store Connect. It needs four repository
+secrets, listed at the top of that file. Without them it still compiles the app unsigned, as a build check.
+
+On a Mac with Xcode:
 
 ```sh
-npx cap add ios        # first time only: creates ios/
 npm run ios:sync       # release build + copy into the Xcode project
 npm run ios:open
 ```
@@ -49,7 +74,7 @@ or run `npx @capacitor/assets generate --ios`.
 
 ### Developer tools
 
-Development builds only. In Settings, tap the "BLOQ Build 4" label five times (or open the page with `?dev=1`).
+Development builds only. In Settings, tap the "BLOQ Build 8" label five times (or open the page with `?dev=1`).
 `npm run build:release` removes all of this from the bundle. You get:
 
 - **Rotation**: mode (energy, unlimited, none), starting charges, max charges, cost per turn, energy per line.

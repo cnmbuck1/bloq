@@ -127,3 +127,56 @@ export function monthCalendar(r: DailyRecords, today: string, year: number, mont
   }
   return { leading, days };
 }
+
+export interface WeekDay extends CalendarDay { /** Monday = 0. */ dow: number; isToday: boolean }
+
+/**
+ * Build 5: the seven-day activity strip on the Daily landing screen: Monday to Sunday of the current (UTC) week,
+ * with the same states as the full calendar. Today stays marked even once completed.
+ */
+export function weekStrip(r: DailyRecords, today: string): WeekDay[] {
+  const [y, m, d] = today.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  const dow = (new Date(t).getUTCDay() + 6) % 7;
+  const first = Object.keys(r.days).sort()[0] ?? today;
+  const out: WeekDay[] = [];
+  for (let i = 0; i < 7; i++) {
+    const dt = new Date(t + (i - dow) * 86_400_000);
+    const id = dt.toISOString().slice(0, 10);
+    const state: CalendarState = r.days[id]?.completed ? 'completed' : id === today ? 'today' : id > today ? 'future' : id < first ? 'before' : 'missed';
+    out.push({ id, day: dt.getUTCDate(), state, dow: i, isToday: id === today });
+  }
+  return out;
+}
+
+/** Build 5: the player's best Daily days, highest first (the history screen's personal records). */
+export function bestDays(r: DailyRecords, n = 5): { id: string; best: number }[] {
+  return Object.entries(r.days).filter(([, v]) => v.completed && v.best > 0).map(([id, v]) => ({ id, best: v.best }))
+    .sort((a, b) => b.best - a.best || (a.id < b.id ? -1 : 1)).slice(0, n);
+}
+
+// ---------------------------------------------------------------- Build 10: local dates for shared challenges
+
+/**
+ * Every player still gets the same challenge (its id is a UTC day, and it resets at UTC midnight), but dates are
+ * shown in the player's own time zone. A challenge is labelled with the local date on which it starts, so west of
+ * UTC (where the reset lands in the evening) it carries the previous local date, and it stays the current challenge
+ * across local midnight until the shared reset. Returns the day shift from challenge id to label (0 or -1).
+ * `offsetMinutes` is Date.getTimezoneOffset(): positive west of UTC.
+ */
+export function labelShift(offsetMinutes: number): number {
+  return offsetMinutes > 0 ? -1 : 0;
+}
+
+/** The records re-keyed by local label date (for the week strip and the month calendar). */
+export function recordsByLabel(r: DailyRecords, shift: number): DailyRecords {
+  if (!shift) return r;
+  const days: Record<string, DailyDayRecord> = {};
+  for (const [id, v] of Object.entries(r.days)) days[addDays(id, shift)] = v;
+  return { ...r, days };
+}
+
+/** A local calendar date as YYYY-MM-DD. */
+export function localDateId(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

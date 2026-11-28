@@ -30,17 +30,17 @@ const move = (s: GameState, slot: number, row: number, col: number, cfg = DEFAUL
 
 describe('level thresholds', () => {
   it('matches the spec table and titles', () => {
-    const want = [0, 1500, 4000, 7500, 12000, 17500, 24000, 31500, 40000, 49500, 60000, 71500, 84000, 97500, 112000];
+    const want = [0, 1500, 4000, 7500, 12000, 18000, 27000, 39000, 53000, 70000, 90000, 113000, 139000, 168000, 200000];
     want.forEach((t, i) => expect(levelThreshold(P, i + 1)).toBe(t));
     expect(levelTitle(P, 1)).toBe('Initiate');
     expect(levelTitle(P, 10)).toBe('Quantum Master');
     expect(levelTitle(P, 15)).toBe('Quantum Master VI');
   });
 
-  it('is endless: each gap past Level 15 grows by 1,000 (Build 4)', () => {
-    expect(levelThreshold(P, 16)).toBe(127500);
-    expect(levelThreshold(P, 17)).toBe(144000);
-    expect(levelThreshold(P, 18)).toBe(161500);
+  it('is endless: each gap past Level 15 grows by 3,000 (Build 12)', () => {
+    expect(levelThreshold(P, 16)).toBe(235000);
+    expect(levelThreshold(P, 17)).toBe(273000);
+    expect(levelThreshold(P, 18)).toBe(314000);
     expect(levelTitle(P, 16)).toBe('Quantum Master VII');
     expect(levelTitle(P, 40)).toMatch(/^Quantum Master [IVXLC]+$/);
     for (let L = 1; L < 60; L++) expect(levelThreshold(P, L + 1)).toBeGreaterThan(levelThreshold(P, L));
@@ -166,8 +166,8 @@ describe('difficulty by level', () => {
   });
 
   it('is deterministic for a seed and level', () => {
-    const a = newGame(31337, DEFAULT_CONFIG, { score: 50000 });
-    const b = newGame(31337, DEFAULT_CONFIG, { score: 50000 });
+    const a = newGame(31337, DEFAULT_CONFIG, { score: 70000 });
+    const b = newGame(31337, DEFAULT_CONFIG, { score: 70000 });
     expect(a.tray).toEqual(b.tray);
     expect(a.level).toBe(10);
   });
@@ -216,9 +216,9 @@ describe('materials', () => {
 });
 
 describe('career and achievements', () => {
-  it('there are 32 achievements (19 from Build 3, 13 from Build 4) with unique ids', () => {
-    expect(ACHIEVEMENTS).toHaveLength(32);
-    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(32);
+  it('there are 34 achievements (19 from Build 3, 13 from Build 4, 2 from Build 10) with unique ids', () => {
+    expect(ACHIEVEMENTS).toHaveLength(34);
+    expect(new Set(ACHIEVEMENTS.map((a) => a.id)).size).toBe(34);
   });
 
   it('lifetime points are never credited twice for the same move (restore, reopen, crash)', () => {
@@ -238,7 +238,7 @@ describe('career and achievements', () => {
     const o = move(s, 0, 0, 7);
     const st = recordMove(emptyStats(), o.result, { seed: 1, moves: 1 });
     const g = grantProgress(st, DEFAULT_CONFIG, 5);
-    expect(g.newAchievements.map((a) => a.id).sort()).toEqual(['double-impact', 'first-contact', 'pulse-initiate', 'triple-threat']);
+    expect(g.newAchievements.map((a) => a.id).sort()).toEqual(['double-impact', 'first-contact', 'pulse-initiate', 'triple-threat', 'two-rows']);
     expect(grantProgress(g.stats, DEFAULT_CONFIG, 6).newAchievements).toEqual([]);
   });
 

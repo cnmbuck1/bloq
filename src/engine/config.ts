@@ -188,12 +188,12 @@ export const DEFAULT_CONFIG: GameConfig = {
     animMs: 180,
   },
   progression: {
-    thresholds: [0, 1500, 4000, 7500, 12000, 17500, 24000, 31500, 40000, 49500, 60000, 71500, 84000, 97500, 112000],
+    thresholds: [0, 1500, 4000, 7500, 12000, 18000, 27000, 39000, 53000, 70000, 90000, 113000, 139000, 168000, 200000],
     titles: [
       'Initiate', 'Operator', 'Technician', 'Specialist', 'Strategist', 'Architect', 'Engineer', 'Mastermind', 'Elite',
       'Quantum Master', 'Quantum Master II', 'Quantum Master III', 'Quantum Master IV', 'Quantum Master V', 'Quantum Master VI',
     ],
-    extraGapStep: 1000,
+    extraGapStep: 3000,
     beyondTitle: 'Quantum Master',
     beyondTitleOffset: 9,
     levelUpEnergy: 'full',

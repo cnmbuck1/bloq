@@ -1,4 +1,4 @@
-// Build 4 Game Center layer. On iPhone it talks to a small native Capacitor plugin (native/ios/GameCenterPlugin.swift,
+// Build 4 Game Center layer. On iPhone it talks to a small native Capacitor plugin (ios/App/App/GameCenterPlugin.swift,
 // not yet verified on a device); everywhere else Game Center is unavailable and BLOQ shows personal records instead.
 // Sign-in is optional and never blocks play. Scores wait in a local queue while offline and are sent when possible.
 // A rank is only ever shown when Game Center actually returned it. Developer sessions never submit.
