@@ -9,7 +9,7 @@ import { playability, type Playability } from '../engine/rotation';
 import type { PlacementTarget } from '../game/session';
 import { Animator } from './animator';
 import { compartmentImage } from './gems';
-import { blockStyle, drawBlock, drawBlockShards, drawGlint, isGemStyle, paintBoard8, paintPlatform8, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
+import { blockStyle, drawBlock, drawBlockShards, warmShards, drawGlint, isGemStyle, paintBoard8, paintPlatform8, paintPedestal, paintEmptyCell, paintFrame, roundRect, setRenderScale, currentMaterial, visualParams, type MaterialLook } from './blocks';
 import { THEME, rgba } from './theme';
 
 export interface Layout {
@@ -113,6 +113,102 @@ export class GameView {
     this.layout = { W, H, bx, by, boardPx, frame, pad, pitch, cell: pitch - gap, gap, energyY, energyH, trayTop, trayH, slotW, slotH, slotGap, trayLeft, trayCell, trayW };
     this.boardBg = null;
     this.bgCache = null;
+    // Glow sprites are keyed by size, so they stay valid across resizes (and stay warm); just keep the set small.
+    if (this.glowCache.size > 24) this.glowCache.clear();
+  }
+
+  /**
+   * Build 10: board-sized glows are pre-rendered once per layout and colour, then drawn with an alpha. A live
+   * shadowBlur on a stroke the size of the board made the GPU re-blur the whole perimeter every frame, which halved
+   * the frame rate while Overdrive ran (its gold frame, energy arcs and activation sweep all stacked blurs).
+   */
+  private glowCache = new Map<string, { c: HTMLCanvasElement; pad: number }>();
+
+  /**
+   * Build 10: Overdrive tints every crystal, and each tinted sprite was first built on the frame that needed it (the
+   * activation frame, and the first placement or drag after it), a burst of work that showed as a hitch. This builds
+   * them ahead of time, in idle moments, once Overdrive is ready.
+   */
+  warmOverdrive() {
+    const L = this.layout;
+    if (!L) return;
+    const scratch = document.createElement('canvas').getContext('2d');
+    if (!scratch) return;
+    const sizes = [L.cell, L.trayCell, L.trayCell * 0.85, L.pitch - L.gap];
+    const jobs: (() => void)[] = [];
+    const { w: pw, rr } = this.perimeterBox();
+    jobs.push(() => this.glowSprite(THEME.gold, Math.max(2, L.frame * 0.36), this.reduced ? 0 : 12, pw, rr));
+    jobs.push(() => this.glowSprite(THEME.gold, Math.max(2, L.frame * 0.4), this.reduced ? 0 : 18, pw, rr));
+    jobs.push(() => this.glowSprite('#FFF3D1', Math.max(1.5, L.frame * 0.3), 0, pw, rr));
+    jobs.push(() => warmShards(L.cell));
+    jobs.push(() => this.glowSprite(THEME.pulse, Math.max(1.5, L.frame * 0.28), this.reduced ? 0 : 10, pw, rr));
+    jobs.push(() => this.glowSprite(isGemStyle() ? THEME.pulse : '#E070D8', Math.max(1.5, L.frame * 0.3), this.reduced ? 0 : 14, pw, rr));
+    for (const sz of sizes) for (const pulse of [false, true]) jobs.push(() => drawBlock(scratch, 0, 0, sz, pulse, 0, this.reduced, { od: true }));
+    const w = window as unknown as { requestIdleCallback?: (f: () => void, o?: { timeout: number }) => number };
+    const idle = (fn: () => void) => { if (w.requestIdleCallback) w.requestIdleCallback(fn, { timeout: 200 }); else setTimeout(fn, 30); };
+    const next = () => { const j = jobs.shift(); if (!j) return; try { j(); } catch { /* a missed warm-up only costs the old on-demand build */ } idle(next); };
+    idle(next);
+  }
+
+  /**
+   * Build 10: soft radial light (ambient drift, combo tint, the Overdrive warmth) drawn from a small cached sprite,
+   * scaled up and faded with globalAlpha. Filling a fresh full-screen gradient every frame was the largest per-frame
+   * cost on the canvas while Overdrive ran and for the second after it ended.
+   */
+  private radialCache = new Map<string, HTMLCanvasElement>();
+  private softLight(color: string, inner: number, peakAt: number, cx: number, cy: number, R: number, alpha: number) {
+    if (alpha <= 0.002 || R <= 0) return;
+    const key = `${color}|${inner}|${peakAt}`;
+    let c = this.radialCache.get(key);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.width = c.height = 96;
+      const q = c.getContext('2d')!;
+      const rg = q.createRadialGradient(48, 48, 48 * inner, 48, 48, 48);
+      if (peakAt > 0) rg.addColorStop(0, rgba(color, 0));
+      rg.addColorStop(peakAt, rgba(color, 1)); rg.addColorStop(1, rgba(color, 0));
+      q.fillStyle = rg; q.fillRect(0, 0, 96, 96);
+      this.radialCache.set(key, c);
+    }
+    const g = this.g;
+    g.save();
+    g.globalAlpha = Math.min(1, alpha);
+    g.drawImage(c, cx - R, cy - R, R * 2, R * 2);
+    g.restore();
+  }
+  private frameGlow(color: string, lw: number, blur: number, x: number, y: number, w: number, rr: number, alpha: number, grow = 0) {
+    if (alpha <= 0.003) return;
+    const e = this.glowSprite(color, lw, blur, w, rr);
+    const g = this.g;
+    g.save();
+    g.globalAlpha = Math.min(1, alpha);
+    const s = w + e.pad * 2 + grow * 2;
+    g.drawImage(e.c, x - e.pad - grow, y - e.pad - grow, s, s);
+    g.restore();
+  }
+
+  private glowSprite(color: string, lw: number, blur: number, w: number, rr: number) {
+    const key = `${color}|${lw.toFixed(1)}|${blur}|${w.toFixed(1)}`;
+    let e = this.glowCache.get(key);
+    if (!e) {
+      const pad = Math.ceil(blur * 2 + lw);
+      const c = document.createElement('canvas');
+      c.width = Math.ceil((w + pad * 2) * this.dpr); c.height = c.width;
+      const q = c.getContext('2d')!;
+      q.scale(this.dpr, this.dpr);
+      q.strokeStyle = color; q.lineWidth = lw; q.shadowColor = color; q.shadowBlur = blur;
+      roundRect(q, pad, pad, w, w, rr); q.stroke();
+      e = { c, pad };
+      this.glowCache.set(key, e);
+    }
+    return e;
+  }
+
+  /** The perimeter rectangle every frame glow follows (see drawPerimeter). */
+  private perimeterBox() {
+    const L = this.layout;
+    const inset = L.frame * 0.45;
+    return { w: L.boardPx - inset * 2, rr: L.pitch * 0.3 };
   }
 
   cellXY(r: number, c: number) {
@@ -792,10 +888,7 @@ export class GameView {
       for (let i = 0; i < 2; i++) {
         const t = now * 0.00007 + i * 3.1;
         const x = cx + Math.cos(t) * L.W * 0.35, y = cy + Math.sin(t * 1.3) * L.boardPx * 0.5;
-        const R = L.boardPx * 0.7;
-        const rg = g.createRadialGradient(x, y, 0, x, y, R);
-        rg.addColorStop(0, rgba(i ? '#5A3C9C' : '#8A2E86', 0.07)); rg.addColorStop(1, 'rgba(0,0,0,0)');
-        g.fillStyle = rg; g.fillRect(x - R, y - R, R * 2, R * 2);
+        this.softLight(i ? '#5A3C9C' : '#8A2E86', 0, 0, x, y, L.boardPx * 0.7, 0.07);
       }
       // rare dust motes (at most 10 alive)
       if (this.dust.length < 10 && Math.random() < dt / 900) {
@@ -819,16 +912,12 @@ export class GameView {
     const k = this.comboEnv * 0.08 + bloom * 0.14;
     if (k > 0.004) {
       const R = L.boardPx * 1.05;
-      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, R);
-      rg.addColorStop(0, rgba('#C04BD8', 0)); rg.addColorStop(0.55, rgba('#C04BD8', k)); rg.addColorStop(1, rgba('#C04BD8', 0));
-      g.fillStyle = rg; g.fillRect(0, 0, L.W, L.H);
+      this.softLight('#C04BD8', 0.3 / 1.05, 0.55, cx, cy, R, k);
     }
     if (this.odEnv > 0.01) {
       // Overdrive: the reactor warms to champagne gold, breathing very slowly
       const breathe = this.reduced ? 0.5 : 0.5 + 0.5 * Math.sin(now * 0.0018);
-      const rg = g.createRadialGradient(cx, cy, L.boardPx * 0.3, cx, cy, L.boardPx * 1.1);
-      rg.addColorStop(0, rgba(THEME.gold, 0)); rg.addColorStop(0.6, rgba(THEME.gold, (0.07 + 0.04 * breathe) * visualParams().odLight * this.odEnv)); rg.addColorStop(1, rgba(THEME.gold, 0));
-      g.fillStyle = rg; g.fillRect(0, 0, L.W, L.H);
+      this.softLight(THEME.gold, 0.3 / 1.1, 0.6, cx, cy, L.boardPx * 1.1, (0.07 + 0.04 * breathe) * visualParams().odLight * this.odEnv);
     }
   }
   private comboEnv = 0;
@@ -847,28 +936,20 @@ export class GameView {
     const x = L.bx + inset, y = L.by + inset, w = L.boardPx - inset * 2;
     g.save();
     if (combo >= 2 && !active) {
-      g.strokeStyle = rgba(THEME.pulse, Math.min(0.55, 0.12 + combo * 0.08)); g.lineWidth = Math.max(1.5, L.frame * 0.28);
-      g.shadowColor = THEME.pulse; g.shadowBlur = this.reduced ? 0 : 6 + combo * 2;
-      roundRect(g, x, y, w, w, rr); g.stroke();
+      this.frameGlow(THEME.pulse, Math.max(1.5, L.frame * 0.28), this.reduced ? 0 : 10, x, y, w, rr, Math.min(0.55, 0.12 + combo * 0.08));
     }
     // Build 6: perimeter light on each energy release (clears), stronger for bigger clears.
     const since = now - this.animator.energyAt;
     if (since >= 0 && since < 700 && !active) {
       const q = 1 - since / 700;
-      g.save();
       // Build 8: the perimeter answers in the board's own cyan (restrained; stronger for bigger clears).
       const gemLook = isGemStyle();
-      g.strokeStyle = rgba(gemLook ? THEME.pulse : '#E070D8', (gemLook ? 0.6 : 0.45) * q * this.animator.energyAmt); g.lineWidth = Math.max(1.5, L.frame * 0.3);
-      g.shadowColor = gemLook ? THEME.pulse : '#C04BD8'; g.shadowBlur = this.reduced ? 0 : 14 * q * (gemLook ? this.animator.energyAmt : 1);
-      roundRect(g, x, y, w, w, rr); g.stroke();
-      g.restore();
+      this.frameGlow(gemLook ? THEME.pulse : '#E070D8', Math.max(1.5, L.frame * 0.3), this.reduced ? 0 : 14, x, y, w, rr, (gemLook ? 0.6 : 0.45) * q * this.animator.energyAmt);
     }
     if (active || this.odEnv > 0.02) {
       const breathe = this.reduced ? 0.6 : 0.6 + 0.4 * Math.sin(now * 0.004);
       const W = visualParams().odLight * Math.max(active ? 0.15 : 0, this.odEnv);
-      g.strokeStyle = rgba(THEME.gold, Math.min(1, 0.65 * breathe * W)); g.lineWidth = Math.max(2, L.frame * 0.36);
-      g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 12 * W;
-      roundRect(g, x, y, w, w, rr); g.stroke();
+      this.frameGlow(THEME.gold, Math.max(2, L.frame * 0.36), this.reduced ? 0 : 12, x, y, w, rr, Math.min(1, 0.65 * breathe * W));
       // Build 6: energy arcs crawl along the frame while Overdrive is live (regenerated ~11 times a second).
       if (!this.reduced && !this.lowFx && active) {
         const per = w * 4, tick = Math.floor(now / 90);
@@ -878,14 +959,15 @@ export class GameView {
         g.lineCap = 'round'; g.lineJoin = 'round';
         for (let k = 0; k < 3; k++) {
           const start = rnd(k) * per, len = L.pitch * (1.2 + rnd(k + 9) * 1.8);
-          g.strokeStyle = rgba(k === 0 ? '#F3D9FF' : '#C46BFF', 0.75 * W); g.lineWidth = k === 0 ? 1.6 : 1.1;
-          g.shadowColor = '#B14CFF'; g.shadowBlur = 10;
           g.beginPath();
           for (let i = 0; i <= 8; i++) {
             const [px, py] = pt(start + (len * i) / 8);
             const j = (rnd(k * 20 + i) - 0.5) * L.frame * 2.2 * (i === 0 || i === 8 ? 0 : 1);
             if (i === 0) g.moveTo(px + j, py + j); else g.lineTo(px + j, py - j);
           }
+          // Build 10: a soft halo stroke under the core replaces the per-frame shadowBlur.
+          g.strokeStyle = rgba('#B14CFF', 0.22 * W); g.lineWidth = 6; g.stroke();
+          g.strokeStyle = rgba(k === 0 ? '#F3D9FF' : '#C46BFF', 0.75 * W); g.lineWidth = k === 0 ? 1.6 : 1.1;
           g.stroke();
         }
         g.restore();
@@ -917,12 +999,9 @@ export class GameView {
     const ow = this.animator.odWave;
     if (ow && now >= ow.start) {
       const p = Math.min(1, (now - ow.start) / ow.dur);
-      g.save();
-      g.strokeStyle = rgba('#FFF3D1', 0.9 * (1 - p)); g.lineWidth = Math.max(2, L.frame * 0.5) * (1 + p);
-      g.shadowColor = THEME.gold; g.shadowBlur = this.reduced ? 0 : 18;
       const grow = p * L.pitch * 0.4;
-      roundRect(g, x - grow, y - grow, w + grow * 2, w + grow * 2, rr + grow); g.stroke();
-      g.restore();
+      this.frameGlow(THEME.gold, Math.max(2, L.frame * 0.4), this.reduced ? 0 : 18, x, y, w, rr, 0.95 * (1 - p), grow);
+      this.frameGlow('#FFF3D1', Math.max(1.5, L.frame * 0.3), 0, x, y, w, rr, 0.9 * (1 - p), grow);
     }
   }
 

@@ -372,8 +372,11 @@ export function drawBlockShards(g: CanvasRenderingContext2D, x: number, y: numbe
   if (p >= 1) return;
   const mat = fx.material ?? current;
   // Build 8: the shards are cut from the gem itself (not the sprite with its contact shadow).
-  const gem = blockStyle() === 'b8' ? gemImage(pulse ? 'pulse' : gemFor(mat.id)) : undefined;
+  const gemKey = pulse ? 'pulse' : gemFor(mat.id);
+  const gemFull = blockStyle() === 'b8' ? gemImage(gemKey) : undefined;
   const gr = gemRect(s);
+  // Build 10: shards cut from a gem pre-scaled to the cell (not the full-size render scaled 200 times a frame).
+  const gem = gemFull ? shardSource(gemFull, gemKey, gr.w) : undefined;
   const spr: CanvasImageSource = gem ?? sprite(s, pulse, mat, fx.od);
   const m = s * MARGIN;
   const rnd = (i: number) => { const v = Math.sin(seed * 91.7 + i * 17.3) * 43758.5453; return v - Math.floor(v); };
@@ -407,6 +410,30 @@ export function drawBlockShards(g: CanvasRenderingContext2D, x: number, y: numbe
     g.stroke();
     g.restore();
   }
+}
+
+const shardCache = new Map<string, HTMLCanvasElement>();
+function shardSource(img: HTMLImageElement, key: string, w: number): HTMLCanvasElement {
+  const px = Math.max(1, Math.round(w * dpr));
+  const k = `${key}|${px}`;
+  let c = shardCache.get(k);
+  if (!c) {
+    if (shardCache.size > 40) shardCache.clear();
+    c = document.createElement('canvas'); c.width = c.height = px;
+    const q = c.getContext('2d')!;
+    q.imageSmoothingQuality = 'high';
+    q.drawImage(img, 0, 0, px, px);
+    shardCache.set(k, c);
+  }
+  return c;
+}
+
+/** Build 10: builds the shard sources for the current material ahead of the first clear. */
+export function warmShards(s: number, mat?: MaterialLook) {
+  if (blockStyle() !== 'b8') return;
+  const m = mat ?? current;
+  const w = gemRect(s).w;
+  for (const key of ['pulse', gemFor(m.id)] as const) { const img = gemImage(key); if (img) shardSource(img, key, w); }
 }
 
 /** The energy core: a breathing diamond with a slow internal sweep. charge (0..1) brightens it before activation. */

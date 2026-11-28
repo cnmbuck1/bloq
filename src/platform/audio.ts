@@ -73,18 +73,24 @@ function tone(freq: number, start: number, dur: number, o: ToneOpts = {}) {
 function noise(start: number, dur: number, gain: number, from: number, to = from, q = 1.2, out: AudioNode | null = sfxBus, at?: number) {
   if (!ctx || !out) return;
   const t = at ?? ctx.currentTime + start;
-  const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
-  const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-  const d = buf.getChannelData(0);
-  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 1.5);
-  const src = ctx.createBufferSource(); src.buffer = buf;
+  // Build 10: one shared noise buffer (the gain ramp below shapes each burst). Generating a fresh buffer per sound
+  // cost a few milliseconds of main-thread work on every big clear, Overdrive start/end and every Overdrive hat.
+  if (!noiseBuf || noiseBuf.sampleRate !== ctx.sampleRate) {
+    const len = Math.floor(ctx.sampleRate * 1.5);
+    noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const src = ctx.createBufferSource(); src.buffer = noiseBuf;
   const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = q;
   f.frequency.setValueAtTime(from, t);
   if (to !== from) f.frequency.exponentialRampToValueAtTime(to, t + dur);
   const g = ctx.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   src.connect(f).connect(g).connect(out);
-  src.start(t);
+  const offset = Math.random() * Math.max(0, noiseBuf.duration - dur);
+  src.start(t, offset, Math.min(dur, noiseBuf.duration));
 }
+let noiseBuf: AudioBuffer | null = null;
 
 // Overlap limiting: the same sound retriggered within a few ms is skipped, so fast chains never pile up.
 const lastPlayed = new Map<string, number>();

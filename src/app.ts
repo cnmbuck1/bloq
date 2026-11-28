@@ -196,6 +196,8 @@ export class App {
 
   private layoutGame() {
     this.view.resize();
+    // Build 10: build glow, shard and Overdrive crystal sprites in idle time, not on the frame that first needs them.
+    this.view.warmOverdrive();
     paintLogoCanvas($<HTMLCanvasElement>('navLogo'));
     this.refreshRotateButtons();
     this.updateOverdriveHud();
@@ -321,6 +323,7 @@ export class App {
     $('chain').classList.remove('on');
     this.updateOverdriveHud();
     this.show('game');
+    if (this.session.state.od && (this.session.state.od.active > 0 || this.session.state.od.charge >= 100)) this.view.warmOverdrive();
     if (!restore) {
       track('game_started', { seed: this.session.state.seed, mode: this.session.state.mode, ruleset: this.session.state.ruleset ?? 2, rotationMode: this.cfg.rotation.mode, gameInSession: this.gamesThisSession + 1 });
       // Played again within 10 s of a result: an immediate replay.
@@ -667,6 +670,7 @@ export class App {
     // Overdrive notices come after the move's own celebration.
     // Build 9: Overdrive states live on the meter and the HUD chip, never over the board.
     if (r.odReady) {
+      this.view.warmOverdrive();
       sfx.odReady(); haptic('record');
       this.flash('btnOverdrive', 'ping');
       this.tip('od-ready', `Overdrive ready: tap the gold meter for ${this.cfg.overdrive.multiplier}× points.`, 600);
@@ -745,6 +749,7 @@ export class App {
   private applyMaterial(level: number) {
     const m = activeMaterial(this.cfg, this.stats, level);
     setMaterial(m);
+    if (this.screen === 'game') this.view.warmOverdrive();
     this.materialCss(m);
   }
 
