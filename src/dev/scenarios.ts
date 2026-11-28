@@ -70,13 +70,13 @@ const BUILD3: Scenario[] = ([
   { name: 'Level-up with depleted energy', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 0, score: 1350, hint: 'Energy 0: watch the gold restore after the line' },
   { name: 'Level-up with full energy', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 3, score: 1350, hint: 'Energy already full: ENERGY FULL, no wasted animation' },
   { name: 'Game over prevented by level-up energy', board: SAVED_BY_LEVEL, tray: [p('o2'), p('i3h'), p('i3h')], energy: 0, score: 1490, hint: 'Place the square in the 2×2 hole: Level 2 refills energy so the i3s can turn' },
-  { name: 'High-level piece generation (Level 9)', board: [E, E, E, E, E, E, E, E], tray: [null, null, p('single')], energy: 3, score: 40000, hint: 'Place the single: the next tray uses the Level 9 mix (15/45/40)' },
+  { name: 'High-level piece generation (Level 9)', board: [E, E, E, E, E, E, E, E], tray: [null, null, p('single')], energy: 3, score: 53000, hint: 'Place the single: the next tray uses the Level 9 mix (15/45/40)' },
   { name: 'Maximum difficulty (Level 11)', board: [E, E, E, E, E, E, E, E], tray: [null, null, p('single')], energy: 3, score: 60000, hint: 'Quantum Platinum; trays use the capped 15/40/45 mix' },
   { name: 'Five-Pulse chain', board: FIVE_CHAIN, tray: [p('single'), p('i2h'), p('o2')], energy: 3, score: 0, hint: 'Single in row 4, column 3' },
   { name: 'Multiple achievements at once', board: ['XXXPXXX.', 'XXXXXXX.', 'XXXXXXX.', E, E, E, E, 'X.......'], tray: [p('i3v'), p('o2'), p('single')], energy: 1, career: FRESH, hint: 'Career counters reset: one triple clear with a Pulse earns four achievements' },
   { name: 'Save and restore during a level-up', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 0, score: 1350, hint: 'Clear the row, then close the app mid-celebration and continue' },
   { name: 'Save and restore after an unlock', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 1, score: 3850, career: { ...FRESH, highestLevel: 2, tipsSeen: ['progress', 'levelup'] }, hint: 'Unlock Violet, then close the app and continue: it stays unlocked' },
-  { name: 'Beyond Level 15', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 1, score: 127400, hint: 'Clear the row to reach Level 16, Quantum Master VII (127,500)' },
+  { name: 'Beyond Level 15', board: LINE_READY, tray: [p('i3h'), p('o2'), p('single')], energy: 1, score: 234900, hint: 'Clear the row to reach Level 16, Quantum Master VII (235,000)' },
 ] satisfies Scenario[]).map((s): Scenario => ({ ...s, group: 'Build 3' }));
 
 // ---------------------------------------------------------------- Build 4: Overdrive, Combo Protection, Perfect Clear

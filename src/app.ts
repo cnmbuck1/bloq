@@ -1951,7 +1951,7 @@ export class App {
     }, { capture: true });
     this.bindGraphics();
     // Build 8: decode the gemstone renders once; until they are ready the Build 6 crystals stand in.
-    void preloadGems().then(() => { if (this.screen === 'game') this.view.resize(); this.wake(); });
+    void preloadGems().then(() => { paintSplash($<HTMLCanvasElement>('splashCanvas')); if (this.screen === 'game') this.view.resize(); this.wake(); });
     const on = (id: string, fn: () => void) => $(id).addEventListener('click', () => { unlockAudio(); fn(); });
     on('btnPlay', () => this.play());
     on('btnContinue', () => this.continueGame());

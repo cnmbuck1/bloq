@@ -263,17 +263,22 @@ export function paintMaterialSwatch(canvas: HTMLCanvasElement, m: MaterialLook, 
 export function paintSplash(canvas: HTMLCanvasElement) {
   const { g, w, h } = fit(canvas);
   g.fillStyle = THEME.bg; g.fillRect(0, 0, w, h);
-  const size = Math.min(w, h) * 0.34;
-  drawOrbIcon(g, size, w / 2 - size / 2, h / 2 - size * 0.75);
-  g.fillStyle = THEME.text;
-  g.font = `700 ${Math.round(size * 0.13)}px ${FONT}`;
+  background(g, w, h);
+  // Build 12: matches the native launch screen (mark scaled from the shorter side of a 2732 square).
+  const unit = Math.max(w, h);
+  const mark = unit * 0.11;
+  drawBloqMark(g, w / 2, h / 2 - mark * 0.42, mark);
+  drawLogo(g, w / 2, h / 2 + mark * 0.62, unit * 0.042);
+  g.fillStyle = THEME.textDim;
+  const fs = Math.round(Math.min(w, h) * 0.032);
+  g.font = `700 ${fs}px ${FONT}`;
   g.textBaseline = 'middle';
   const label = 'CNMBUCK STUDIOS';
-  const sp = size * 0.03;
+  const sp = fs * 0.22;
   const width = [...label].reduce((a, ch) => a + g.measureText(ch).width + sp, -sp);
   let x = w / 2 - width / 2;
   g.textAlign = 'left';
-  for (const ch of label) { g.fillText(ch, x, h / 2 + size * 0.45); x += g.measureText(ch).width + sp; }
+  for (const ch of label) { g.fillText(ch, x, h * 0.9); x += g.measureText(ch).width + sp; }
 }
 
 export interface ShareInfo {
@@ -421,28 +426,67 @@ export function renderDailyShareCard(info: DailyShareInfo): HTMLCanvasElement {
   return c;
 }
 
-/** App icon (opaque, square): the Cnmbuck Orb as hero, set into a machined BLOQ board corner. */
+/**
+ * Build 12 BLOQ mark: a 2×2 block of the game's own gemstones set into board compartments, with the Pulse crystal
+ * in the lower right giving off a soft cyan light. No studio orb, so the game stands on its own.
+ * Draws the mark centred on (cx, cy) with total width `size`. Returns false when the gem renders are not loaded yet.
+ */
+export function drawBloqMark(g: CanvasRenderingContext2D, cx: number, cy: number, size: number): boolean {
+  if (!gemsReady()) return false;
+  const pitch = size / 2, cell = pitch * 0.9;
+  const x0 = cx - size / 2, y0 = cy - size / 2;
+  // cyan light pooling from the Pulse crystal
+  const lx = x0 + pitch * 1.5, ly = y0 + pitch * 1.5;
+  const pool = g.createRadialGradient(lx, ly, 0, lx, ly, size * 0.95);
+  pool.addColorStop(0, 'rgba(89,221,235,0.30)'); pool.addColorStop(0.45, 'rgba(89,221,235,0.08)'); pool.addColorStop(1, 'rgba(89,221,235,0)');
+  g.fillStyle = pool; g.fillRect(cx - size * 1.2, cy - size * 1.2, size * 2.4, size * 2.4);
+  // a recessed tray holding the four stones
+  const pad = size * 0.045, r = size * 0.09;
+  g.save();
+  roundRect(g, x0 - pad, y0 - pad, size + pad * 2, size + pad * 2, r);
+  const tray = g.createLinearGradient(0, y0 - pad, 0, y0 + size + pad);
+  tray.addColorStop(0, '#0B121C'); tray.addColorStop(1, '#152131');
+  g.fillStyle = tray; g.fill();
+  g.lineWidth = Math.max(1, size * 0.012); g.strokeStyle = 'rgba(148,190,214,0.35)'; g.stroke();
+  g.restore();
+  const tile = compartmentImage();
+  const stones: GemKey[] = ['pink', 'amber', 'sapphire', 'pulse'];
+  stones.forEach((key, i) => {
+    const c = i % 2, rr = Math.floor(i / 2);
+    const tx = x0 + c * pitch + (pitch - cell) / 2, ty = y0 + rr * pitch + (pitch - cell) / 2;
+    if (tile) g.drawImage(tile, tx, ty, cell, cell);
+    if (key === 'pulse') {
+      const gx = tx + cell / 2, gy = ty + cell / 2;
+      const halo = g.createRadialGradient(gx, gy, cell * 0.2, gx, gy, cell * 0.75);
+      halo.addColorStop(0, 'rgba(120,235,245,0.55)'); halo.addColorStop(1, 'rgba(89,221,235,0)');
+      g.fillStyle = halo; g.fillRect(gx - cell, gy - cell, cell * 2, cell * 2);
+    }
+    gemAt(g, key, tx + cell / 2, ty + cell / 2, cell * 0.92);
+  });
+  return true;
+}
+
+/** App icon (opaque, square): the BLOQ mark on the midnight background. */
 export function renderAppIcon(size = 1024): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
   background(g, size, size);
-  const cell = size * 0.19, pitch = size * 0.215, o = size * 0.06;
-  const blocks: [number, number, boolean][] = [[0, 0, false], [0, 1, false], [1, 0, false], [3, 3, false], [3, 4, true], [4, 3, false], [4, 4, false]];
-  for (const [r, cc, p] of blocks) drawBlock(g, o + cc * pitch, o + r * pitch, cell, p, 0, true, { material: MAGENTA_LOOK });
-  drawOrbIcon(g, size * 0.74, size * 0.13, size * 0.13);
+  drawBloqMark(g, size / 2, size / 2, size * 0.62);
   return c;
 }
 
-/** Launch screen (square, centre-safe): the BLOQ wordmark on graphite. */
+/** Launch screen (square, centre-safe): the BLOQ mark above the wordmark. The in-app splash matches it. */
 export function renderLaunch(size = 2732): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d')!;
   setRenderScale(1);
   background(g, size, size);
-  drawLogo(g, size / 2, size / 2, size * 0.075);
+  const mark = size * 0.11;
+  drawBloqMark(g, size / 2, size / 2 - mark * 0.42, mark);
+  drawLogo(g, size / 2, size / 2 + mark * 0.62, size * 0.042);
   return c;
 }
 

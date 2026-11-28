@@ -7,7 +7,7 @@ const { resolve } = require('node:path');
   const b = await chromium.launch();
   const p = await b.newPage();
   await p.goto('file://' + resolve('preview/bloq.html'));
-  await p.waitForFunction(() => window.__bloqArt);
+  await p.waitForFunction(() => window.__bloqArt && window.__bloqArt.drawBloqMark(document.createElement('canvas').getContext('2d'), 0, 0, 10), null, { timeout: 20000 });
   const out = await p.evaluate(() => ({
     icon: window.__bloqArt.renderAppIcon(1024).toDataURL('image/png'),
     launch: window.__bloqArt.renderLaunch(2732).toDataURL('image/png'),
